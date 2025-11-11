@@ -4,7 +4,7 @@
 
 const API_BASE = window.location.hostname.includes('localhost')
   ? "http://localhost:3000/api"
-  : "https://YOUR-RENDER-APP.onrender.com/api"; // <-- update for production
+  : "https://online-inventory-documents-system-olzt.onrender.com/api"; // <-- update for production
 
 // ====== Utilities ======
 function qs(sel){ return document.querySelector(sel); }
@@ -620,3 +620,4 @@ window.downloadDocument = downloadDocument;
 window.deleteDocumentConfirm = deleteDocumentConfirm;
 
 // End of script
+
