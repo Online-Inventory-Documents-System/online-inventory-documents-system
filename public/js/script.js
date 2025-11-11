@@ -1,9 +1,10 @@
-// client/js/script.js - FULLY API VERSION (READY TO DEPLOY)
+// public/js/script.js
+// Full client script (login, inventory, documents, logs, settings)
+// Ready to copy-paste. Replace YOUR-RENDER-APP with your actual domain.
 
-// ⚠️ Automatically set API_BASE depending on environment
 const API_BASE = window.location.hostname.includes('localhost')
   ? "http://localhost:3000/api"
-  : "https://YOUR-RENDER-APP.onrender.com/api"; // <- Replace with your Render app
+  : "https://YOUR-RENDER-APP.onrender.com/api"; // <-- update for production
 
 // ====== Utilities ======
 function qs(sel){ return document.querySelector(sel); }
@@ -12,13 +13,12 @@ function showMsg(el, text, color='red'){ if(!el) return; el.textContent = text; 
 function escapeHtml(s){ if(!s) return ''; return String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
 const getUsername = () => sessionStorage.getItem('adminName') || 'Guest';
 
-// Global state
 let inventory = [];
 let activityLog = [];
 let documents = [];
 const currentPage = window.location.pathname.split('/').pop();
 
-// ====== Standard Fetch Wrapper with Authorization Header ======
+// ====== Standard Fetch Wrapper ======
 async function apiFetch(url, options = {}) {
     const user = getUsername();
     options.headers = {
@@ -31,13 +31,14 @@ async function apiFetch(url, options = {}) {
 
 // ====== Auth redirect & Globals ======
 if(!sessionStorage.getItem('isLoggedIn') && !window.location.pathname.includes('login.html')) {
-  window.location.href = 'login.html';
+  // Only redirect when not on login page
+  try { window.location.href = 'login.html'; } catch(e) {}
 }
 
 function logout(){
   sessionStorage.removeItem('isLoggedIn');
   sessionStorage.removeItem('adminName');
-  if(window.CONFIG && CONFIG.LS_THEME) localStorage.removeItem(CONFIG.LS_THEME); 
+  if(window.CONFIG && CONFIG.LS_THEME) localStorage.removeItem(CONFIG.LS_THEME);
   window.location.href = 'login.html';
 }
 
@@ -54,7 +55,6 @@ function toggleTheme(){
 function renderInventory(items) {
     const listEl = qs('#inventoryList');
     if (!listEl) return;
-    
     listEl.innerHTML = ''; 
     let totalValue = 0;
     let totalRevenue = 0;
@@ -103,22 +103,21 @@ function renderInventory(items) {
 function renderDocuments(docs) {
     const listEl = qs('#docList');
     if (!listEl) return;
-    
     listEl.innerHTML = ''; 
     docs.forEach(doc => {
         const id = doc.id;
-        const sizeBytes = doc.sizeBytes || doc.size; 
+        const sizeBytes = doc.sizeBytes || doc.size || 0; 
         const sizeMB = (sizeBytes / (1024 * 1024)).toFixed(2); 
         const row = document.createElement('tr');
         row.dataset.id = id;
-        const fileName = doc.name;
+        const fileName = doc.name || 'unknown';
         
         row.innerHTML = `
             <td>${escapeHtml(fileName)}</td>
             <td>${sizeMB} MB</td>
             <td>${new Date(doc.date).toLocaleString()}</td>
             <td class="actions">
-                <button class="primary-btn small-btn" onclick="downloadDocument('${fileName}')">⬇️ Download</button>
+                <button class="primary-btn small-btn" onclick="downloadDocument('${encodeURIComponent(fileName)}')">⬇️ Download</button>
                 <button class="danger-btn small-btn" onclick="deleteDocumentConfirm('${id}')">🗑️ Delete</button>
             </td>
         `;
@@ -130,7 +129,6 @@ function renderDocuments(docs) {
 function renderLogs() {
     const listEl = qs('#logList');
     if (!listEl) return;
-    
     listEl.innerHTML = ''; 
     const reversedLog = [...activityLog].reverse(); 
     reversedLog.forEach(log => {
@@ -138,7 +136,6 @@ function renderLogs() {
         item.innerHTML = `[${escapeHtml(log.time)}] <b>${escapeHtml(log.user)}</b>: ${escapeHtml(log.action)}`;
         listEl.appendChild(item);
     });
-    
     renderDashboardData();
 }
 
@@ -173,29 +170,57 @@ function renderDashboardData(){
     qs('#dash_totalValue').textContent = totalValue.toFixed(2);
     qs('#dash_totalRevenue').textContent = totalRevenue.toFixed(2);
     qs('#dash_totalStock').textContent = totalStock;
+  }
 }
 
 // ====== Data Fetchers ======
-async function fetchInventory() { try { const res = await apiFetch(`${API_BASE}/inventory`); inventory = await res.json(); renderInventory(inventory); renderDashboardData(); } catch(e){ console.error('Failed to fetch inventory:', e); } }
-async function fetchDocuments() { try { const res = await apiFetch(`${API_BASE}/documents`); documents = await res.json(); renderDocuments(documents); } catch(e){ console.error('Failed to fetch documents:', e); } }
-async function fetchLogs() { try { const res = await apiFetch(`${API_BASE}/logs`); activityLog = await res.json(); renderLogs(); } catch(e){ console.error('Failed to fetch logs:', e); } }
+async function fetchInventory() {
+    try {
+        const res = await apiFetch(`${API_BASE}/inventory`);
+        if (!res.ok) throw new Error('Network response was not ok');
+        inventory = await res.json();
+        renderInventory(inventory); 
+        renderDashboardData(); 
+    } catch(e) { console.error('Failed to fetch inventory:', e); }
+}
+
+async function fetchDocuments() {
+    try {
+        const res = await apiFetch(`${API_BASE}/documents`);
+        if (!res.ok) throw new Error('Network response was not ok');
+        documents = await res.json();
+        renderDocuments(documents); 
+    } catch(e) { console.error('Failed to fetch documents:', e); }
+}
+
+async function fetchLogs() {
+    try {
+        const res = await apiFetch(`${API_BASE}/logs`);
+        if (!res.ok) throw new Error('Network response was not ok');
+        activityLog = await res.json();
+        renderLogs(); 
+    } catch(e) { console.error('Failed to fetch logs:', e); }
+}
 
 // ====== On load init ======
 window.addEventListener('load', async () => {
     const adminName = getUsername();
     if(qs('#adminName')) qs('#adminName').textContent = adminName;
-    const theme = window.CONFIG && CONFIG.LS_THEME ? localStorage.getItem(CONFIG.LS_THEME) : null;
+
+    const theme = (window.CONFIG && CONFIG.LS_THEME) ? localStorage.getItem(CONFIG.LS_THEME) : null;
     if(theme === 'dark') document.body.classList.add('dark-mode');
 
-    if(currentPage.includes('inventory')) { await fetchInventory(); bindInventoryUI(); }
-    if(currentPage.includes('documents')) { await fetchDocuments(); bindDocumentsUI(); }
-    if(currentPage.includes('log')) { await fetchLogs(); }
-    if(currentPage.includes('index.html') || currentPage === '' || currentPage === 'index.html') { await fetchLogs(); await fetchInventory(); }
-    if(currentPage.includes('product')) bindProductPage();
-    if(currentPage.includes('setting')) bindSettingPage();
+    try {
+      if(currentPage.includes('inventory')) { await fetchInventory(); bindInventoryUI(); }
+      if(currentPage.includes('documents')) { await fetchDocuments(); bindDocumentsUI(); }
+      if(currentPage.includes('log')) { await fetchLogs(); }
+      if(currentPage === '' || currentPage === 'index.html' || currentPage.includes('index.html')) { await fetchLogs(); await fetchInventory(); }
+      if(currentPage.includes('product')) bindProductPage();
+      if(currentPage.includes('setting')) bindSettingPage();
+    } catch (e) { console.error('Init error:', e); }
 });
 
-// ====== AUTH (Unchanged) ======
+// ====== AUTH ======
 async function login(){
   const user = qs('#username')?.value.trim();
   const pass = qs('#password')?.value.trim();
@@ -241,6 +266,7 @@ function toggleForm(){
   const loginForm = qs('#loginForm');
   const registerForm = qs('#registerForm');
   const formTitle = qs('#formTitle');
+  if(!loginForm || !registerForm || !formTitle) return;
   if(getComputedStyle(loginForm).display === 'none'){
     loginForm.style.display = 'block';
     registerForm.style.display = 'none';
@@ -253,20 +279,17 @@ function toggleForm(){
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Bindings (Login page only)
-    if(currentPage.includes('login.html')){
+    if(currentPage.includes('login.html') || window.location.pathname.endsWith('/login.html')) {
         qs('#loginBtn')?.addEventListener('click', login);
         qs('#registerBtn')?.addEventListener('click', register);
         qs('#toggleToRegister')?.addEventListener('click', toggleForm);
         qs('#toggleToLogin')?.addEventListener('click', toggleForm);
-        if (qs('#contactPhone')) qs('#contactPhone').textContent = CONFIG.CONTACT_PHONE;
+        if (qs('#contactPhone') && window.CONFIG && CONFIG.CONTACT_PHONE) qs('#contactPhone').textContent = CONFIG.CONTACT_PHONE;
     }
 });
 
+// ====== INVENTORY FUNCTIONS ======
 
-// ====== INVENTORY LOGIC (Confirmation logic) ======
-
-// NEW: Add product with confirmation dialog
 async function confirmAndAddProduct(){
   const sku = qs('#p_sku')?.value.trim();
   const name = qs('#p_name')?.value.trim();
@@ -284,7 +307,6 @@ async function confirmAndAddProduct(){
       if(res.ok){
         ['#p_sku','#p_name','#p_category','#p_quantity','#p_unitCost','#p_unitPrice'].forEach(id => { if(qs(id)) qs(id).value=''; });
         await fetchInventory(); 
-        // Added this to ensure log data is refreshed on inventory page after adding an item
         if(currentPage.includes('inventory')) await fetchLogs(); 
         alert('✅ Product added successfully.');
       } else {
@@ -293,7 +315,6 @@ async function confirmAndAddProduct(){
   } catch(e){ console.error(e); alert('❌ Server connection error while adding product.'); }
 }
 
-// NEW: Delete item with confirmation dialog
 async function confirmAndDeleteItem(id){
   const item = inventory.find(x => x.id === id);
   if(!item) return;
@@ -311,7 +332,6 @@ async function confirmAndDeleteItem(id){
   } catch(e){ console.error(e); alert('❌ Server connection error while deleting product.'); }
 }
 
-// NEW: Generate report with confirmation dialog
 async function confirmAndGenerateReport() {
     if(!window.confirm('Confirm Generate Report: This will create and save a new Excel file.')) return;
 
@@ -320,12 +340,10 @@ async function confirmAndGenerateReport() {
 
         if (res.ok) {
             const blob = await res.blob();
-            // Try to extract filename from Content-Disposition header
             const contentDisposition = res.headers.get('Content-Disposition');
             const filenameMatch = contentDisposition ? contentDisposition.match(/filename="(.+?)"/) : null;
             const filename = filenameMatch ? filenameMatch[1] : `Inventory_Report_${Date.now()}.xlsx`;
             
-            // Trigger file download
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.style.display = 'none';
@@ -336,12 +354,8 @@ async function confirmAndGenerateReport() {
             window.URL.revokeObjectURL(url);
             a.remove();
             
-            // The server is responsible for logging and updating the documents list.
-            // A simple refresh will pull the updated documents.
             await fetchDocuments(); 
-            
             alert(`Report "${filename}" successfully generated and saved to Documents!`);
-
         } else {
             const error = await res.json();
             alert(`Failed to generate report: ${error.message}`);
@@ -356,21 +370,20 @@ function bindInventoryUI(){
   qs('#addProductBtn')?.addEventListener('click', confirmAndAddProduct); 
   qs('#reportBtn')?.addEventListener('click', confirmAndGenerateReport); 
   qs('#searchInput')?.addEventListener('input', searchInventory);
-  qs('#clearSearchBtn')?.addEventListener('click', ()=> { qs('#searchInput').value=''; searchInventory(); });
+  qs('#clearSearchBtn')?.addEventListener('click', ()=> { if(qs('#searchInput')) { qs('#searchInput').value=''; searchInventory(); } });
 }
 
 function searchInventory() {
-    const query = qs('#searchInput')?.value.toLowerCase().trim();
+    const query = qs('#searchInput')?.value.toLowerCase().trim() || '';
     const filtered = inventory.filter(item => 
-        item.sku.toLowerCase().includes(query) || 
-        item.name.toLowerCase().includes(query) || 
-        item.category.toLowerCase().includes(query)
+        (item.sku||'').toLowerCase().includes(query) || 
+        (item.name||'').toLowerCase().includes(query) || 
+        (item.category||'').toLowerCase().includes(query)
     );
     renderInventory(filtered);
 }
 
-
-// ====== PRODUCT PAGE (EDIT) - MODIFIED Save button ======
+// ====== PRODUCT PAGE (EDIT) ======
 function openEditPageForItem(id){
   window.location.href = `product.html?id=${encodeURIComponent(id)}`;
 }
@@ -382,31 +395,32 @@ async function bindProductPage(){
   if(id){
     try{
         const res = await apiFetch(`${API_BASE}/inventory`);
+        if(!res.ok) throw new Error('Failed to fetch inventory');
         const items = await res.json();
         const it = items.find(x => String(x.id) === String(id));
         if(!it) { alert('Item not found'); return; }
         
-        qs('#prod_id').value = it.id;
-        qs('#prod_sku').value = it.sku || '';
-        qs('#prod_name').value = it.name || '';
-        qs('#prod_category').value = it.category || '';
-        qs('#prod_quantity').value = it.quantity || 0;
-        qs('#prod_unitCost').value = it.unitCost || 0;
-        qs('#prod_unitPrice').value = it.unitPrice || 0;
+        if(qs('#prod_id')) qs('#prod_id').value = it.id;
+        if(qs('#prod_sku')) qs('#prod_sku').value = it.sku || '';
+        if(qs('#prod_name')) qs('#prod_name').value = it.name || '';
+        if(qs('#prod_category')) qs('#prod_category').value = it.category || '';
+        if(qs('#prod_quantity')) qs('#prod_quantity').value = it.quantity || 0;
+        if(qs('#prod_unitCost')) qs('#prod_unitCost').value = it.unitCost || 0;
+        if(qs('#prod_unitPrice')) qs('#prod_unitPrice').value = it.unitPrice || 0;
     } catch(e){ alert('Failed to load product details.'); return; }
   }
 
   qs('#saveProductBtn')?.addEventListener('click', async ()=>{
     if(!window.confirm('Confirm: Save Changes?')) return;
 
-    const idVal = qs('#prod_id').value;
+    const idVal = qs('#prod_id')?.value;
     const body = {
-      sku: qs('#prod_sku').value,
-      name: qs('#prod_name').value,
-      category: qs('#prod_category').value,
-      quantity: Number(qs('#prod_quantity').value||0),
-      unitCost: Number(qs('#prod_unitCost').value||0),
-      unitPrice: Number(qs('#prod_unitPrice').value||0)
+      sku: qs('#prod_sku')?.value,
+      name: qs('#prod_name')?.value,
+      category: qs('#prod_category')?.value,
+      quantity: Number(qs('#prod_quantity')?.value||0),
+      unitCost: Number(qs('#prod_unitCost')?.value||0),
+      unitPrice: Number(qs('#prod_unitPrice')?.value||0)
     };
     
     try{
@@ -423,22 +437,22 @@ async function bindProductPage(){
   qs('#cancelProductBtn')?.addEventListener('click', ()=> window.location.href = 'inventory.html');
 }
 
-// ====== DOCUMENTS LOGIC (Confirmation logic) ======
+// ====== DOCUMENTS LOGIC ======
 
-// Function to handle simulated file upload
 async function uploadDocuments() {
-    const files = qs('#docUpload').files;
-    const msgEl = qs('.controls p#uploadMessage') || document.createElement('p');
-    msgEl.id = 'uploadMessage';
-    msgEl.style.marginTop = '10px';
-    qs('.controls').appendChild(msgEl);
+    const files = qs('#docUpload')?.files || [];
+    let msgEl = qs('#uploadMessage');
+    if(!msgEl) {
+      msgEl = document.createElement('p');
+      msgEl.id = 'uploadMessage';
+      if(qs('.controls')) qs('.controls').appendChild(msgEl);
+    }
 
     if (files.length === 0) {
         showMsg(msgEl, '⚠️ Please select files to upload.', 'red');
         return;
     }
     
-    // Confirmation Dialog
     if(!window.confirm(`Confirm Upload: Upload metadata for ${files.length} document(s)?`)) {
         showMsg(msgEl, 'Upload cancelled.', 'orange');
         return;
@@ -471,15 +485,15 @@ async function uploadDocuments() {
         }
     }
 
-    qs('#docUpload').value = '';
+    if(qs('#docUpload')) qs('#docUpload').value = '';
     setTimeout(async () => {
         await fetchDocuments();
-        msgEl.remove();
+        if(msgEl) msgEl.remove();
     }, 1000);
 }
 
-// Function to handle document download (simulated via server redirect)
-function downloadDocument(fileName) {
+function downloadDocument(fileNameEncoded) {
+    const fileName = decodeURIComponent(fileNameEncoded);
     if(!window.confirm(`Confirm Download: ${fileName}?`)) return;
     window.open(`${API_BASE}/documents/download/${encodeURIComponent(fileName)}`, '_blank');
 }
@@ -496,7 +510,7 @@ async function deleteDocumentConfirm(id) {
 async function deleteDocument(id) {
     try {
         const res = await apiFetch(`${API_BASE}/documents/${id}`, { method: 'DELETE' });
-        if(res.status === 204){
+        if(res.status === 204 || res.ok){
             await fetchDocuments(); 
             alert('🗑️ Document metadata deleted successfully!');
         } else {
@@ -506,10 +520,10 @@ async function deleteDocument(id) {
 }
 
 function searchDocuments() {
-    const query = qs('#searchDocs')?.value.toLowerCase().trim();
+    const query = qs('#searchDocs')?.value.toLowerCase().trim() || '';
     const filtered = documents.filter(doc => 
-        doc.name.toLowerCase().includes(query) || 
-        new Date(doc.date).toLocaleString().toLowerCase().includes(query)
+        (doc.name||'').toLowerCase().includes(query) || 
+        (doc.date? new Date(doc.date).toLocaleString().toLowerCase() : '').includes(query)
     );
     renderDocuments(filtered);
 }
@@ -519,8 +533,8 @@ function bindDocumentsUI() {
     qs('#searchDocs')?.addEventListener('input', searchDocuments);
 }
 
-// ====== NEW: Bindings for Setting page ======
-async function bindSettingPage(){
+// ====== SETTINGS PAGE BINDINGS ======
+function bindSettingPage(){
     const currentUsername = getUsername();
     if(qs('#currentUser')) qs('#currentUser').textContent = currentUsername;
 
@@ -540,7 +554,6 @@ async function bindSettingPage(){
 
         if (!window.confirm('Confirm Password Change? You will be logged out after a successful update.')) return;
 
-
         try {
             const res = await apiFetch(`${API_BASE}/account/password`, { 
                 method: 'PUT', 
@@ -554,9 +567,9 @@ async function bindSettingPage(){
 
             if (res.ok) {
                 showMsg(msgEl, '✅ Password updated successfully! Please log in again.', 'green');
-                qs('#newPassword').value = '';
-                qs('#confirmPassword').value = '';
-                qs('#securityCode').value = '';
+                if(qs('#newPassword')) qs('#newPassword').value = '';
+                if(qs('#confirmPassword')) qs('#confirmPassword').value = '';
+                if(qs('#securityCode')) qs('#securityCode').value = '';
                 setTimeout(logout, 1500); 
             } else {
                 showMsg(msgEl, `❌ ${data.message || 'Failed to change password.'}`, 'red');
@@ -593,3 +606,17 @@ async function bindSettingPage(){
         }
     });
 }
+
+// ====== Utility: bind inventory & documents on pages that exist ======
+function bindInventoryUIIfNeeded(){ if(currentPage.includes('inventory')) bindInventoryUI(); }
+function bindDocumentsUIIfNeeded(){ if(currentPage.includes('documents')) bindDocumentsUI(); }
+
+// Optional: expose some functions to global for inline onclick usage
+window.logout = logout;
+window.toggleTheme = toggleTheme;
+window.openEditPageForItem = openEditPageForItem;
+window.confirmAndDeleteItem = confirmAndDeleteItem;
+window.downloadDocument = downloadDocument;
+window.deleteDocumentConfirm = deleteDocumentConfirm;
+
+// End of script
