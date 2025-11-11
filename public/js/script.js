@@ -388,4 +388,74 @@ async function deleteDocumentConfirm(id){
 
 async function deleteDocument(id){
   try{
-    const res = await apiFetch(`${API_BASE}/documents/${id}`, {
+    const res = await apiFetch(`${API_BASE}/documents/${id}`, { method:'DELETE' });
+    if(res.status===204 || res.ok){ await fetchDocuments(); alert('🗑️ Document deleted'); }
+    else alert('❌ Delete failed');
+  } catch(e){ console.error(e); alert('❌ Server error'); }
+}
+
+function searchDocuments(){
+  const query = (qs('#searchDocs')?.value||'').toLowerCase().trim();
+  const filtered = documents.filter(doc=> (doc.name||'').toLowerCase().includes(query) || (doc.date?new Date(doc.date).toLocaleString().toLowerCase():'').includes(query));
+  renderDocuments(filtered);
+}
+
+function bindDocumentsUI(){
+  qs('#uploadDocsBtn')?.addEventListener('click', uploadDocuments);
+  qs('#searchDocs')?.addEventListener('input', searchDocuments);
+}
+
+// ====== SETTINGS ======
+function bindSettingPage(){
+  const currentUsername = getUsername();
+  if(qs('#currentUser')) qs('#currentUser').textContent = currentUsername;
+
+  qs('#changePasswordBtn')?.addEventListener('click', async ()=>{
+    const newPass = qs('#newPassword')?.value;
+    const confPass = qs('#confirmPassword')?.value;
+    const code = qs('#securityCode')?.value;
+    const msgEl = qs('#passwordMessage');
+    showMsg(msgEl,'');
+    if(!newPass||!confPass||!code){ return showMsg(msgEl,'⚠️ Fill all fields','red'); }
+    if(newPass!==confPass){ return showMsg(msgEl,'⚠️ Passwords do not match','red'); }
+    if(!confirm('Change password? You will be logged out after.')) return;
+
+    try{
+      const res = await apiFetch(`${API_BASE}/account/password`, { method:'PUT', body: JSON.stringify({ username:currentUsername,newPassword:newPass,securityCode:code }) });
+      const data = await res.json();
+      if(res.ok){ showMsg(msgEl,'✅ Password updated. Logging out','green'); setTimeout(logout,1500); }
+      else showMsg(msgEl,`❌ ${data.message||'Failed'}`,'red');
+    } catch(e){ showMsg(msgEl,'❌ Server error','red'); }
+  });
+
+  qs('#deleteAccountBtn')?.addEventListener('click', async ()=>{
+    if(!confirm(`Delete account for "${currentUsername}"?`)) return;
+    const code = prompt('Enter Admin Security Code:');
+    if(!code) return alert('Cancelled');
+
+    try{
+      const res = await apiFetch(`${API_BASE}/account`, { method:'DELETE', body: JSON.stringify({ username:currentUsername,securityCode:code }) });
+      const data = await res.json();
+      if(res.ok){ alert('🗑️ Account deleted'); logout(); }
+      else alert(`❌ ${data.message||'Failed'}`);
+    } catch(e){ alert('❌ Server error'); }
+  });
+}
+
+// ====== Event bindings ======
+document.addEventListener('DOMContentLoaded', ()=>{
+  if(currentPage.includes('login.html')){
+    qs('#loginBtn')?.addEventListener('click', login);
+    qs('#registerBtn')?.addEventListener('click', register);
+    qs('#toggleToRegister')?.addEventListener('click', toggleForm);
+    qs('#toggleToLogin')?.addEventListener('click', toggleForm);
+  }
+});
+
+// ====== Expose globals ======
+window.logout = logout;
+window.toggleTheme = toggleTheme;
+window.openEditPageForItem = openEditPageForItem;
+window.confirmAndDeleteItem = confirmAndDeleteItem;
+window.downloadDocument = downloadDocument;
+window.deleteDocumentConfirm = deleteDocumentConfirm;
