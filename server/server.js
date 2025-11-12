@@ -1,11 +1,11 @@
 // server/server.js
-// Final MongoDB + Express server for Online Inventory & Documents System
+// MongoDB (Mongoose) based server for Online Inventory & Documents System
 
 const express = require('express');
 const cors = require('cors');
+const xlsx = require('xlsx');
 const mongoose = require('mongoose');
 const path = require('path');
-const xlsx = require('xlsx');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -16,16 +16,11 @@ const SECURITY_CODE = process.env.SECRET_SECURITY_CODE || '1234';
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// ===== Serve frontend =====
 app.use(express.static(path.join(__dirname, '../public')));
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../public/index.html'));
-});
 
-// ===== MongoDB connection =====
+// ===== Mongoose / Models =====
 if (!MONGODB_URI) {
-  console.error('MONGODB_URI is not set. Set it in your environment variables.');
+  console.error('MONGODB_URI is not set. Set MONGODB_URI environment variable.');
   process.exit(1);
 }
 
@@ -34,7 +29,6 @@ mongoose.connect(MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true 
   .then(()=> console.log('Connected to MongoDB Atlas'))
   .catch(err => { console.error('MongoDB connect error:', err); process.exit(1); });
 
-// ===== Schemas =====
 const { Schema } = mongoose;
 
 const UserSchema = new Schema({
@@ -69,7 +63,7 @@ const LogSchema = new Schema({
 });
 const ActivityLog = mongoose.model('ActivityLog', LogSchema);
 
-// ===== Helper =====
+// Utility to log activities
 async function logActivity(user, action){
   try {
     await ActivityLog.create({ user: user || 'Unknown', action, time: new Date() });
@@ -115,12 +109,12 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// ===== Inventory =====
+// ===== Inventory CRUD =====
 app.get('/api/inventory', async (req, res) => {
   try {
     const items = await Inventory.find({}).lean();
     return res.json(items);
-  } catch(err){ console.error(err); return res.status(500).json({ message:'Server error' }); }
+  } catch(err) { console.error(err); return res.status(500).json({ message:'Server error' }); }
 });
 
 app.post('/api/inventory', async (req, res) => {
@@ -152,9 +146,9 @@ app.delete('/api/inventory/:id', async (req, res) => {
 // ===== Documents =====
 app.get('/api/documents', async (req, res) => {
   try {
-    const docs = await Doc.find({}).sort({ date:-1 }).lean();
+    const docs = await Doc.find({}).sort({ date: -1 }).lean();
     return res.json(docs);
-  } catch(err){ console.error(err); return res.status(500).json({ message:'Server error' }); }
+  } catch (err) { console.error(err); return res.status(500).json({ message:'Server error' }); }
 });
 
 app.post('/api/documents', async (req, res) => {
@@ -168,16 +162,16 @@ app.post('/api/documents', async (req, res) => {
 app.delete('/api/documents/:id', async (req, res) => {
   try {
     const doc = await Doc.findByIdAndDelete(req.params.id);
-    if (!doc) return res.status(404).json({ message:'Document not found' });
+    if (!doc) return res.status(404).json({ message: 'Document not found' });
     await logActivity(req.headers['x-username'], `Deleted document: ${doc.name}`);
     return res.status(204).send();
   } catch(err){ console.error(err); return res.status(500).json({ message:'Server error' }); }
 });
 
-// ===== Logs =====
+// ===== Activity Logs =====
 app.get('/api/logs', async (req, res) => {
   try {
-    const logs = await ActivityLog.find({}).sort({ time:-1 }).limit(500).lean();
+    const logs = await ActivityLog.find({}).sort({ time: -1 }).limit(500).lean();
     return res.json(logs.map(l => ({
       user: l.user,
       action: l.action,
@@ -186,5 +180,8 @@ app.get('/api/logs', async (req, res) => {
   } catch(err){ console.error(err); return res.status(500).json({ message:'Server error' }); }
 });
 
-// ===== Start Server =====
+// ===== Serve frontend =====
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, '../public/index.html')));
+
+// ===== Start server =====
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
