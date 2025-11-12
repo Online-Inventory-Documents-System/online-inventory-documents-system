@@ -4,7 +4,7 @@
 const RENDER_API_ORIGIN = "https://online-inventory-documents-system-olzt.onrender.com"; // <-- set your Render URL
 const API_BASE = window.location.hostname.includes('localhost')
   ? "http://localhost:3000/api"
-  : `https://online-inventory-documents-system-olzt.onrender.com/api`;
+  : "https://online-inventory-documents-system-olzt.onrender.com/api";
 
 // Utilities
 function qs(sel){ return document.querySelector(sel); }
@@ -606,4 +606,5 @@ window.openEditPageForItem = openEditPageForItem;
 window.confirmAndDeleteItem = confirmAndDeleteItem;
 window.downloadDocument = downloadDocument;
 window.deleteDocumentConfirm = deleteDocumentConfirm;
+
 
