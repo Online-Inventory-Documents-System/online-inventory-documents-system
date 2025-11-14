@@ -2,70 +2,75 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Dashboard | Inventory System</title>
-  <link rel="stylesheet" href="CSS/style.css" />
-  <!-- Chart.js CDN for the dashboard bar chart -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="css/style.css" />
 </head>
+
 <body>
-  <header>
-    <h1>📊 Dashboard</h1>
-    <nav>
-      <a href="index.html">Home</a>
-      <a href="inventory.html">Inventory</a>
-      <a href="documents.html">Documents</a>
-      <a href="log.html">Activity Log</a>
-      <a href="sales.html">Sales</a>
-      <a href="orders.html">Orders</a>
-      <a href="setting.html" style="text-decoration:none;"><button>⚙️ Setting</button></a>
-      <button id="downloadSalesXLSXBtn">⬇️ Sales Report</button>
-      <button id="downloadOrdersXLSXBtn">⬇️ Orders Report</button>
-      <button onclick="toggleTheme()">🌓 Mode</button>
-      <button onclick="logout()">🚪 Logout</button>
-      <div id="adminInfo">Logged in as: <span id="adminName"></span></div>
-    </nav>
-  </header>
+<header>
+  <h1>📊 Dashboard</h1>
+  <nav>
+    <a href="index.html" class="active">Home</a>
+    <a href="inventory.html">Inventory</a>
+    <a href="documents.html">Documents</a>
+    <a href="log.html">Activity Log</a>
+    <a href="sales.html">Sales</a>
+    <a href="orders.html">Orders</a>
+    <a href="setting.html" style="text-decoration:none;"><button>⚙️ Setting</button></a>
 
-  <main>
-    <section class="cards">
-      <div class="card">
-        <h3>Total Items</h3>
-        <div id="dash_totalItems">0</div>
-      </div>
-      <div class="card">
-        <h3>Total Inventory Value (RM)</h3>
-        <div id="dash_totalValue">0.00</div>
-      </div>
-      <div class="card">
-        <h3>Total Potential Revenue (RM)</h3>
-        <div id="dash_totalRevenue">0.00</div>
-      </div>
-      <div class="card">
-        <h3>Total Stock Quantity</h3>
-        <div id="dash_totalStock">0</div>
-      </div>
-    </section>
+    <!-- Report buttons -->
+    <button onclick="window.open('/api/dashboard/report/excel','_blank')">⬇️ Excel</button>
+    <button onclick="window.open('/api/dashboard/report/pdf','_blank')">⬇️ PDF</button>
+    <button onclick="window.open('/api/reports/download-all','_blank')">🗂 ZIP All Reports</button>
 
-    <section style="margin-top:20px;">
-      <h2>Recent Activities</h2>
-      <table class="table">
-        <thead><tr><th>User</th><th>Action</th><th>Time</th></tr></thead>
-        <tbody id="recentActivities"></tbody>
-      </table>
-    </section>
+    <button onclick="toggleTheme()">🌓 Mode</button>
+    <button onclick="logout()">🚪 Logout</button>
 
-    <section style="margin-top:20px;">
-      <h2>Inventory Chart</h2>
-      <div class="chart-wrap" style="height:320px;">
-        <canvas id="inventoryChart"></canvas>
-        <div id="inventoryChartFallback" style="font-size:0.9rem;color:#777;margin-top:8px;"></div>
+    <div id="adminInfo">Logged in as: <span id="adminName"></span></div>
+  </nav>
+</header>
+
+<main>
+  <section>
+    <div class="dashboard-grid">
+
+      <!-- LEFT SIDE: Stats -->
+      <div class="dashboard-info">
+        <h2>📌 System Overview</h2>
+        <ul>
+          <li><strong>Total Inventory Items:</strong> <span id="totalItems">0</span></li>
+          <li><strong>Low Stock Items:</strong> <span id="lowStock">0</span></li>
+          <li><strong>Total Sales (RM):</strong> <span id="totalSales">0.00</span></li>
+          <li><strong>Total Orders:</strong> <span id="totalOrders">0</span></li>
+        </ul>
+
+        <div class="info-card">
+          <div class="clock" id="clock">--:--:--</div>
+          <table id="recentActivities">
+            <thead>
+              <tr><th>Activity</th><th>Time</th></tr>
+            </thead>
+            <tbody id="activityList"></tbody>
+          </table>
+        </div>
       </div>
-    </section>
-  </main>
 
-  <script src="js/setting.js" defer></script>
-  <script src="js/script.js" defer></script>
-  <script>document.documentElement.dataset.page = 'index';</script>
+      <!-- RIGHT SIDE: Quick Access -->
+      <div class="dashboard-card-container">
+        <a id="btn-inventory" class="quick-access-btn" href="inventory.html">📦 Inventory</a>
+        <a id="btn-documents" class="quick-access-btn" href="documents.html">📁 Documents</a>
+      </div>
+
+    </div>
+  </section>
+</main>
+
+<script src="js/setting.js" defer></script>
+<script src="js/script.js" defer></script>
+<script>
+  document.documentElement.dataset.page = 'dashboard';
+</script>
+
 </body>
 </html>
