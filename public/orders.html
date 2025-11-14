@@ -19,9 +19,6 @@
     <a href="orders.html" class="active">Orders</a>
     <a href="setting.html" style="text-decoration:none;"><button>⚙️ Setting</button></a>
 
-    <button id="downloadOrdersXLSXBtn">⬇️ Orders Report (Excel)</button>
-    <button id="downloadOrdersPDFBtn" onclick="window.open('/api/orders/report/pdf','_blank')">⬇️ Orders Report (PDF)</button>
-
     <button onclick="toggleTheme()">🌓 Mode</button>
     <button onclick="logout()">🚪 Logout</button>
 
@@ -33,7 +30,6 @@
   <h2>Order Records</h2>
 
   <div class="controls">
-    <button id="downloadOrdersXLSXBtnInline" class="success-btn">⬇️ Download Orders (Excel)</button>
     <button class="secondary-btn" onclick="window.open('/api/orders/report/pdf','_blank')">⬇️ Download Orders (PDF)</button>
   </div>
 
