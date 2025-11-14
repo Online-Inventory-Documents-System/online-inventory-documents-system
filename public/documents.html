@@ -6,10 +6,11 @@
   <title>Documents | Inventory System</title>
   <link rel="stylesheet" href="css/style.css" />
 </head>
-
 <body>
+
 <header>
   <h1>📁 Documents</h1>
+
   <nav>
     <a href="index.html">Home</a>
     <a href="inventory.html">Inventory</a>
@@ -17,11 +18,10 @@
     <a href="log.html">Activity Log</a>
     <a href="sales.html">Sales</a>
     <a href="orders.html">Orders</a>
-    <a href="setting.html"><button>⚙️ Setting</button></a>
+    <a href="setting.html" style="text-decoration:none;"><button>⚙️ Setting</button></a>
 
-    <!-- Documents Page Buttons -->
-    <button onclick="window.open('/api/documents/report/excel','_blank')">⬇️ Excel</button>
-    <button onclick="window.open('/api/documents/report/pdf','_blank')">⬇️ PDF</button>
+    <button id="downloadDocsXLSXBtn">⬇️ Documents Excel</button>
+    <button onclick="window.open('/api/documents/report/pdf','_blank')">⬇️ Documents PDF</button>
 
     <button onclick="toggleTheme()">🌓 Mode</button>
     <button onclick="logout()">🚪 Logout</button>
@@ -30,49 +30,66 @@
   </nav>
 </header>
 
-<main>
-  <section>
-    <h2>Document Storage</h2>
 
-    <!-- Upload Area -->
-    <div class="product-bar">
-      <input type="file" id="uploadFile">
-      <button class="primary-btn" onclick="uploadDocument()">📤 Upload File</button>
+<section>
+  <h2>Upload Documents</h2>
+
+  <div class="controls">
+    <input type="file" id="docUpload" multiple />
+    <button id="uploadDocsBtn" class="primary-btn">📤 Upload</button>
+
+    <button class="success-btn" id="downloadDocsXLSXBtnInline">⬇️ Download Excel</button>
+    <button class="secondary-btn" onclick="window.open('/api/documents/report/pdf','_blank')">
+      ⬇️ Download PDF
+    </button>
+  </div>
+
+  <div class="controls">
+    <div class="search-controls">
+      <input id="searchDocs" type="text" placeholder="Search documents..." />
+      <button id="clearSearchDocsBtn" class="secondary-btn">Clear</button>
     </div>
+  </div>
 
-    <!-- Search -->
-    <div class="controls">
-      <div class="search-controls">
-        <input type="text" id="searchDocs" placeholder="Search documents...">
-        <button class="secondary-btn" onclick="searchDocuments()">🔍 Search</button>
-      </div>
-    </div>
+  <div class="table-container">
+    <table id="documentsTable">
+      <thead>
+        <tr>
+          <th>Document Name</th>
+          <th>Size (MB)</th>
+          <th>Uploaded</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="docList"></tbody>
+    </table>
+  </div>
+</section>
 
-    <!-- Document Table -->
-    <div class="table-container">
-      <table id="documentsTable">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Type</th>
-            <th>Size</th>
-            <th>Date</th>
-            <th>Download</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody id="documentsList"></tbody>
-      </table>
-    </div>
-
-  </section>
-</main>
 
 <script src="js/setting.js" defer></script>
 <script src="js/script.js" defer></script>
-
 <script>
-  document.documentElement.dataset.page = 'documents';
+document.documentElement.dataset.page = 'documents';
+
+document.addEventListener("DOMContentLoaded", () => {
+  const btn = document.querySelector("#downloadDocsXLSXBtnInline");
+  if (btn && window.downloadDocumentsReportXLSX) {
+    btn.addEventListener("click", downloadDocumentsReportXLSX);
+  }
+
+  const clearBtn = document.querySelector("#clearSearchDocsBtn");
+  if (clearBtn) {
+    clearBtn.addEventListener("click", () => {
+      const s = document.querySelector("#searchDocs");
+      if (s) {
+        s.value = "";
+        searchDocuments();
+      }
+    });
+  }
+});
 </script>
+
 </body>
 </html>
