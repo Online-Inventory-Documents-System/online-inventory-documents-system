@@ -25,8 +25,14 @@
       
       <button id="loginBtn" type="button" class="primary-btn">Login</button>
       
-      <p class="info">Forgot password? Contact the admin email: leongjiawei360@gmail.com <b id="contactPhone"></b></p>
-      <div class="toggle-link" id="toggleToRegister">Don't have an account? Register here</div>
+      <p class="info">
+        Forgot password? Contact admin email: <b>leongjiawei360@gmail.com</b>
+        <b id="contactPhone"></b>
+      </p>
+
+      <div class="toggle-link" onclick="toggleForm()">
+        Don't have an account? Register here
+      </div>
       
       <p id="loginMessage"></p>
     </div>
@@ -43,16 +49,29 @@
       <input type="text" id="securityCode" placeholder="Enter company security code" />
       
       <button id="registerBtn" type="button" class="success-btn">Register Account</button>
-      
-      <div class="toggle-link" id="toggleToLogin">Already have an account? Login here</div>
+
+      <div class="toggle-link" onclick="toggleForm()">
+        Already have an account? Login here
+      </div>
       
       <p id="registerMessage"></p>
     </div>
   </div>
 
+  <!-- Load scripts -->
   <script src="js/setting.js" defer></script>
   <script src="js/script.js" defer></script>
+
+  <!-- Auto-bind login & register buttons -->
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const loginBtn = document.getElementById("loginBtn");
+      const registerBtn = document.getElementById("registerBtn");
+
+      if (loginBtn) loginBtn.addEventListener("click", login);
+      if (registerBtn) registerBtn.addEventListener("click", register);
+    });
+  </script>
+
 </body>
 </html>
-
-
