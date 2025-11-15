@@ -1,16 +1,14 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Documents | Inventory System</title>
-  <link rel="stylesheet" href="css/style.css" />
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Documents | Inventory System</title>
+<link rel="stylesheet" href="css/style.css"/>
 </head>
 <body>
-
 <header>
-  <h1>📁 Documents</h1>
-
+  <h1>📄 Document Management</h1>
   <nav>
     <a href="index.html">Home</a>
     <a href="inventory.html">Inventory</a>
@@ -18,69 +16,44 @@
     <a href="sales.html">Sales</a>
     <a href="orders.html">Orders</a>
     <a href="log.html">Activity Log</a>
-    <a href="setting.html" style="text-decoration:none;"><button>⚙️ Setting</button></a>
+    <a href="setting.html"><button>⚙️ Setting</button></a>
     <button onclick="toggleTheme()">🌓 Mode</button>
     <button onclick="logout()">🚪 Logout</button>
-
     <div id="adminInfo">Logged in as: <span id="adminName"></span></div>
   </nav>
 </header>
 
-
 <section>
-  <h2>Upload Documents</h2>
-
-  <div class="controls">
+  <h2>Upload & Manage Documents</h2>
+  <div class="controls" style="margin-bottom:15px;">
     <input type="file" id="docUpload" multiple />
-    <button id="uploadDocsBtn" class="primary-btn">📤 Upload</button>
-  <div class="controls">
-    <div class="search-controls">
-      <input id="searchDocs" type="text" placeholder="Search documents..." />
-      <button id="clearSearchDocsBtn" class="secondary-btn">Clear</button>
+    <button id="uploadDocsBtn" class="primary-btn">📤 Upload (Simulated)</button>
+    <div style="display:flex;gap:8px;margin-left:10px;">
+      <button id="downloadDocsXLSXBtn" class="success-btn">⬇️ Documents (Excel)</button>
+      <button id="downloadDocsPDFBtn" class="secondary-btn">⬇️ Documents (PDF)</button>
     </div>
+    <input type="text" id="searchDocs" placeholder="Search document metadata..." style="margin-left:10px;" />
+    <p id="uploadMessage" style="margin-top:10px;"></p>
   </div>
 
   <div class="table-container">
     <table id="documentsTable">
       <thead>
-        <tr>
-          <th>Document Name</th>
-          <th>Size (MB)</th>
-          <th>Uploaded</th>
-          <th>Actions</th>
-        </tr>
+        <tr><th>File Name</th><th>Size (MB)</th><th>Date</th><th class="actions">Actions</th></tr>
       </thead>
       <tbody id="docList"></tbody>
     </table>
   </div>
 </section>
 
-
 <script src="js/setting.js" defer></script>
 <script src="js/script.js" defer></script>
 <script>
-document.documentElement.dataset.page = 'documents';
-
-document.addEventListener("DOMContentLoaded", () => {
-  const btn = document.querySelector("#downloadDocsXLSXBtnInline");
-  if (btn && window.downloadDocumentsReportXLSX) {
-    btn.addEventListener("click", downloadDocumentsReportXLSX);
-  }
-
-  const clearBtn = document.querySelector("#clearSearchDocsBtn");
-  if (clearBtn) {
-    clearBtn.addEventListener("click", () => {
-      const s = document.querySelector("#searchDocs");
-      if (s) {
-        s.value = "";
-        searchDocuments();
-      }
-    });
-  }
-});
+  document.documentElement.dataset.page = 'documents';
+  document.addEventListener('DOMContentLoaded', ()=>{
+    document.getElementById('downloadDocsPDFBtn')?.addEventListener('click', ()=> window.open(`${API_BASE}/documents/report/pdf`,'_blank'));
+    document.getElementById('downloadDocsXLSXBtn')?.addEventListener('click', ()=> window.open(`${API_BASE}/documents/report`,'_blank'));
+  });
 </script>
-
 </body>
 </html>
-
-
