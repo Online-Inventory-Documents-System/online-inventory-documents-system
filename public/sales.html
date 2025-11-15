@@ -1,63 +1,112 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Sales | Inventory System</title>
-  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/style.css"/>
 </head>
+
 <body>
-  <header>
-    <h1>💰 Sales</h1>
-    <nav>
-      <a href="index.html">Home</a>
-      <a href="inventory.html">Inventory</a>
-      <a href="documents.html">Documents</a>
-      <a href="log.html">Activity Log</a>
-      <a href="sales.html" class="active">Sales</a>
-      <a href="orders.html">Orders</a>
-      <a href="setting.html" style="text-decoration:none;"><button>⚙️ Setting</button></a>
-      <button onclick="toggleTheme()">🌓 Mode</button>
-      <button onclick="logout()">🚪 Logout</button>
-      <div id="adminInfo">Logged in as: <span id="adminName"></span></div>
-    </nav>
-  </header>
 
-  <main>
-    <section>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-        <h2>Sales Records</h2>
-        <div style="display:flex;gap:8px;">
-          <button id="addSaleBtn" class="primary-btn">+ Add New Sale</button>
-          <button id="downloadSalesXLSXBtnInline" class="success-btn">⬇️ Download Sales (Excel)</button>
-          <button id="downloadSalesPDFBtn" class="secondary-btn">⬇️ Download Sales (PDF)</button>
-        </div>
-      </div>
+<header>
+  <h1>💰 Sales</h1>
+  <nav>
+    <a href="index.html">Home</a>
+    <a href="inventory.html">Inventory</a>
+    <a href="documents.html">Documents</a>
+    <a href="log.html">Activity Log</a>
+    <a class="active" href="sales.html">Sales</a>
+    <a href="orders.html">Orders</a>
 
-      <div class="table-container">
-        <table id="salesTable">
-          <thead>
-            <tr><th>Invoice</th><th>Product (SKU)</th><th>Qty</th><th class="money">Total (RM)</th><th>Date</th><th class="actions">Actions</th></tr>
-          </thead>
-          <tbody id="salesList"></tbody>
-        </table>
-      </div>
-    </section>
-  </main>
+    <a href="setting.html"><button>⚙️ Setting</button></a>
 
-  <!-- modal placeholders created by script.js when needed -->
+    <button onclick="toggleTheme()">🌓 Mode</button>
+    <button onclick="logout()">🚪 Logout</button>
 
-  <script src="js/setting.js" defer></script>
-  <script src="js/script.js" defer></script>
-  <script>
-    document.documentElement.dataset.page = 'sales';
-    document.addEventListener('DOMContentLoaded', () => {
-      // PDF button
-      qs('#downloadSalesPDFBtn')?.addEventListener('click', ()=> {
-        if(!confirm('Download Sales PDF?')) return;
-        window.open(`${window.location.origin}/api/sales/report/pdf`, '_blank');
-      });
-    });
-  </script>
+    <div id="adminInfo">Logged in as: <span id="adminName"></span></div>
+  </nav>
+</header>
+
+
+
+<section class="sales-container">
+
+  <h2>Sales Records</h2>
+
+  <!-- Controls -->
+  <div class="controls">
+    <div class="search-controls">
+      <input id="searchSales" type="text" placeholder="🔍 Search invoice / product">
+      <button id="clearSalesSearchBtn" class="secondary-btn">Clear</button>
+    </div>
+
+    <div class="right">
+      <button id="addSaleBtn" class="success-btn">+ Add Sale</button>
+
+      <button id="downloadSalesXLSXBtnInline" class="primary-btn">⬇️ Excel</button>
+      <button id="downloadSalesPDFBtn" class="secondary-btn"
+        onclick="window.open('/api/sales/report/pdf','_blank')">
+        ⬇️ PDF
+      </button>
+    </div>
+  </div>
+
+
+  <!-- Table -->
+  <div class="table-container">
+    <table id="salesTable">
+      <thead>
+        <tr>
+          <th>Invoice</th>
+          <th>Product</th>
+          <th>Qty</th>
+          <th>Total (RM)</th>
+          <th>Date</th>
+          <th style="text-align:center;">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="salesList"></tbody>
+    </table>
+  </div>
+
+</section>
+
+
+<!-- ================================
+      ADD + EDIT SALE MODAL
+================================== -->
+<div id="saleModal" class="modal" style="display:none;">
+  <div class="modal-inner wide-modal">
+
+    <h3 id="saleModalTitle">Add New Sale</h3>
+
+    <label>Invoice No. (Auto or Manual):</label>
+    <input type="text" id="sale_invoice">
+
+    <label>Product:</label>
+    <input type="text" id="sale_product_search" placeholder="Search product..." />
+
+    <div id="sale_product_dropdown" class="dropdown-list" style="display:none;"></div>
+
+    <label>Quantity:</label>
+    <input type="number" id="sale_quantity" min="1" value="1">
+
+    <label>Total (RM):</label>
+    <input type="number" id="sale_total" step="0.01">
+
+    <div class="modal-actions">
+      <button id="saveSaleBtn" class="primary-btn">Save</button>
+      <button id="cancelSaleBtn" class="secondary-btn">Cancel</button>
+    </div>
+
+  </div>
+</div>
+
+
+
+<script src="js/setting.js" defer></script>
+<script src="js/script.js" defer></script>
+
 </body>
 </html>
