@@ -3,158 +3,124 @@ const fs = require("fs");
 const router = express.Router();
 
 const INV_FILE = __dirname + "/../data/inventory.json";
-const LOG_FILE = __dirname + "/../data/stock_logs.json";
+const MOV_FILE = __dirname + "/../data/movements.json";
 
-// Ensure files exist
-function loadFile(file, fallback) {
-    if (!fs.existsSync(file)) fs.writeFileSync(file, JSON.stringify(fallback, null, 2));
+// Ensure data files exist
+if (!fs.existsSync(INV_FILE)) fs.writeFileSync(INV_FILE, "[]");
+if (!fs.existsSync(MOV_FILE)) fs.writeFileSync(MOV_FILE, "[]");
+
+// Helper: Load JSON
+function load(file) {
     return JSON.parse(fs.readFileSync(file));
 }
 
-function saveFile(file, data) {
+// Helper: Save JSON
+function save(file, data) {
     fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
 /* ============================================================
-   GET ALL INVENTORY ITEMS
-============================================================ */
+   ✅ GET INVENTORY LIST (with live stock balance)
+   ============================================================ */
 router.get("/", (req, res) => {
-    const inventory = loadFile(INV_FILE, []);
-    return res.json(inventory);
+    const inventory = load(INV_FILE);
+    const movements = load(MOV_FILE);
+
+    // calculate dynamic stock balance
+    const finalList = inventory.map(item => {
+        const qtyIn = movements
+            .filter(m => m.itemId === item.id && m.type === "IN")
+            .reduce((a, b) => a + b.quantity, 0);
+
+        const qtyOut = movements
+            .filter(m => m.itemId === item.id && m.type === "OUT")
+            .reduce((a, b) => a + b.quantity, 0);
+
+        return {
+            ...item,
+            currentStock: qtyIn - qtyOut
+        };
+    });
+
+    res.json(finalList);
 });
 
 /* ============================================================
-   ADD NEW INVENTORY ITEM
-   Fields expected:
-   { sku, name, category, cost, price, quantity }
-============================================================ */
+   ✅ ADD NEW ITEM
+   ============================================================ */
 router.post("/add", (req, res) => {
-    const { sku, name, category, cost, price, quantity } = req.body;
+    const { name, sku, category, minStock } = req.body;
 
-    if (!sku || !name || !quantity)
-        return res.status(400).json({ success: false, message: "Missing required fields" });
-
-    const inventory = loadFile(INV_FILE, []);
-
-    if (inventory.find(i => i.sku === sku))
-        return res.status(409).json({ success: false, message: "SKU already exists" });
+    const inventory = load(INV_FILE);
 
     const newItem = {
-        sku,
+        id: Date.now().toString(),
         name,
-        category: category || "Uncategorized",
-        cost: Number(cost) || 0,
-        price: Number(price) || 0,
-        quantity: Number(quantity),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        sku,
+        category,
+        minStock: Number(minStock || 0),
+        createdAt: new Date()
     };
 
     inventory.push(newItem);
-    saveFile(INV_FILE, inventory);
+    save(INV_FILE, inventory);
 
-    return res.json({ success: true, item: newItem });
+    res.json({ success: true, message: "Item added", item: newItem });
 });
 
 /* ============================================================
-   UPDATE ITEM
-============================================================ */
-router.put("/:sku", (req, res) => {
-    const { sku } = req.params;
-    const { name, category, cost, price } = req.body;
+   ✅ STOCK IN
+   ============================================================ */
+router.post("/stock-in", (req, res) => {
+    const { itemId, quantity, user } = req.body;
 
-    const inventory = loadFile(INV_FILE, []);
+    const movements = load(MOV_FILE);
 
-    const item = inventory.find(i => i.sku === sku);
-    if (!item) return res.status(404).json({ success: false, message: "Item not found" });
+    const record = {
+        id: Date.now().toString(),
+        itemId,
+        quantity: Number(quantity),
+        type: "IN",
+        user,
+        date: new Date()
+    };
 
-    if (name) item.name = name;
-    if (category) item.category = category;
-    if (cost !== undefined) item.cost = Number(cost);
-    if (price !== undefined) item.price = Number(price);
-    item.updatedAt = new Date().toISOString();
+    movements.push(record);
+    save(MOV_FILE, movements);
 
-    saveFile(INV_FILE, inventory);
-
-    return res.json({ success: true, item });
+    res.json({ success: true, message: "Stock In recorded" });
 });
 
 /* ============================================================
-   DELETE ITEM
-============================================================ */
-router.delete("/:sku", (req, res) => {
-    const { sku } = req.params;
+   ✅ STOCK OUT
+   ============================================================ */
+router.post("/stock-out", (req, res) => {
+    const { itemId, quantity, user } = req.body;
 
-    let inventory = loadFile(INV_FILE, []);
-    const before = inventory.length;
+    const movements = load(MOV_FILE);
 
-    inventory = inventory.filter(i => i.sku !== sku);
+    const record = {
+        id: Date.now().toString(),
+        itemId,
+        quantity: Number(quantity),
+        type: "OUT",
+        user,
+        date: new Date()
+    };
 
-    if (inventory.length === before)
-        return res.status(404).json({ success: false, message: "SKU not found" });
+    movements.push(record);
+    save(MOV_FILE, movements);
 
-    saveFile(INV_FILE, inventory);
-
-    return res.json({ success: true });
+    res.json({ success: true, message: "Stock Out recorded" });
 });
 
 /* ============================================================
-   STOCK IN / OUT TRACKING
-   Body:
-   {
-     sku,
-     type: "in" | "out",
-     qty,
-     user
-   }
-============================================================ */
-router.post("/stock", (req, res) => {
-    const { sku, type, qty, user } = req.body;
-
-    if (!sku || !type || !qty)
-        return res.status(400).json({ success: false, message: "Missing fields" });
-
-    const inventory = loadFile(INV_FILE, []);
-    const logs = loadFile(LOG_FILE, []);
-
-    const item = inventory.find(i => i.sku === sku);
-    if (!item) return res.status(404).json({ success: false, message: "Item not found" });
-
-    const q = Number(qty);
-
-    if (type === "in") item.quantity += q;
-    else if (type === "out") {
-        if (item.quantity < q)
-            return res.status(400).json({ success: false, message: "Insufficient stock" });
-
-        item.quantity -= q;
-    } else {
-        return res.status(400).json({ success: false, message: "Invalid stock type" });
-    }
-
-    item.updatedAt = new Date().toISOString();
-
-    // Log entry
-    logs.push({
-        sku,
-        type,
-        qty: q,
-        user: user || "system",
-        timestamp: new Date().toISOString()
-    });
-
-    saveFile(INV_FILE, inventory);
-    saveFile(LOG_FILE, logs);
-
-    return res.json({ success: true, item });
-});
-
-/* ============================================================
-   GET STOCK LOGS
-============================================================ */
-router.get("/logs/all", (req, res) => {
-    const logs = loadFile(LOG_FILE, []);
-    return res.json(logs);
+   ✅ GET MOVEMENT HISTORY (for one item)
+   ============================================================ */
+router.get("/history/:itemId", (req, res) => {
+    const { itemId } = req.params;
+    const movements = load(MOV_FILE);
+    res.json(movements.filter(m => m.itemId === itemId));
 });
 
 module.exports = router;
