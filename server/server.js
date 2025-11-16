@@ -179,15 +179,15 @@ app.delete("/api/inventory/:id", async (req, res) => {
 // ============================================================================
 app.get("/api/inventory/report/pdf", async (req, res) => {
   try {
-    const items = await Inventory.find({}).lean();
+    const items = await Inventory.find({}).lean() || [];
 
     const now = new Date();
     const printDate = now.toLocaleString();
     const reportId = `REP-${Date.now()}`;
     const printedBy = req.headers["x-username"] || "System";
+    const filename = `Inventory_Report_${now.toISOString().slice(0,10)}.pdf`;
 
-    const filename = `Inventory_Report_${now.toISOString().slice(0, 10)}.pdf`;
-
+    // PDF init
     const doc = new PDFDocument({
       size: "A4",
       layout: "landscape",
@@ -199,33 +199,9 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
     res.setHeader("Content-Type", "application/pdf");
     doc.pipe(res);
 
-    // ----------------------
-    // PAGE 1 HEADER ONLY
-    // ----------------------
-    function drawHeader() {
-      doc.fontSize(22).font("Helvetica-Bold").text("L&B Company", 40, 40);
-      doc.fontSize(10).font("Helvetica");
-      doc.text("Jalan Mawar 8, Taman Bukit Beruang Permai, Melaka", 40, 70);
-      doc.text("Phone: 01133127622", 40, 85);
-      doc.text("Email: lbcompany@gmail.com", 40, 100);
-
-      // Right side header block
-      doc.fontSize(15).font("Helvetica-Bold").text("INVENTORY REPORT", 620, 40);
-      doc.fontSize(10).font("Helvetica");
-
-      doc.text(`Print Date: ${printDate}`, 620, 63);
-      doc.text(`Report ID: ${reportId}`, 620, 78);
-      doc.text(`Status: Generated`, 620, 93);
-      doc.text(`Printed by: ${printedBy}`, 620, 108);
-
-      doc.moveTo(40, 130).lineTo(800, 130).stroke();
-    }
-
-    // ====================================
-    // TABLE WIDTHS (SAFE / NO WRAPPING)
-    // ====================================
-    const rowHeight = 18;
-
+    // Layout config
+    const ROWS_PER_PAGE = 10;      // EXACTLY 10 rows per page
+    const rowHeight = 18;          // chosen: 18px
     const cols = {
       sku: 40,
       name: 100,
@@ -236,24 +212,33 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
       value: 560,
       revenue: 670
     };
-
     const widths = {
-      sku: 60,
-      name: 160,
-      category: 80,
-      qty: 60,
-      cost: 80,
-      price: 80,
-      value: 110,
-      revenue: 120
+      sku: 60, name: 160, category: 80, qty: 60, cost: 80, price: 80, value: 110, revenue: 120
     };
 
-    // ====================================
-    // DRAW TABLE HEADER
-    // ====================================
+    // Draw company header (company info + right meta block) — used only on page 1
+    function drawCompanyHeader() {
+      doc.font("Helvetica-Bold").fontSize(22).text("L&B Company", 40, 40);
+      doc.font("Helvetica").fontSize(10);
+      doc.text("Jalan Mawar 8, Taman Bukit Beruang Permai, Melaka", 40, 70);
+      doc.text("Phone: 01133127622", 40, 85);
+      doc.text("Email: lbcompany@gmail.com", 40, 100);
+
+      // Right meta block (upper-right)
+      const rx = 620;
+      doc.font("Helvetica-Bold").fontSize(15).text("INVENTORY REPORT", rx, 40);
+      doc.font("Helvetica").fontSize(10);
+      doc.text(`Print Date: ${printDate}`, rx, 63);
+      doc.text(`Report ID: ${reportId}`, rx, 78);
+      doc.text(`Status: Generated`, rx, 93);
+      doc.text(`Printed by: ${printedBy}`, rx, 108);
+
+      doc.moveTo(40, 130).lineTo(doc.page.width - 40, 130).stroke();
+    }
+
+    // Draw table column header (drawn on every page, including page1)
     function drawTableHeader(y) {
       doc.font("Helvetica-Bold").fontSize(10);
-
       doc.rect(cols.sku, y, widths.sku, rowHeight).stroke();
       doc.rect(cols.name, y, widths.name, rowHeight).stroke();
       doc.rect(cols.category, y, widths.category, rowHeight).stroke();
@@ -275,105 +260,103 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
       return y + rowHeight;
     }
 
-    // ====================================
-    // START PAGE 1
-    // ====================================
+    // Pagination calculations
+    const totalItems = items.length;
+    const totalPages = Math.max(1, Math.ceil(totalItems / ROWS_PER_PAGE));
 
-    drawHeader();
+    // Track totals — accumulate across all items
+    let grandQty = 0;
+    let grandValue = 0;
+    let grandRevenue = 0;
 
-    let y = 150;
-    y = drawTableHeader(y);
+    // Render pages
+    for (let pageIndex = 0; pageIndex < totalPages; pageIndex++) {
+      // For pageIndex > 0 create page (first page created by PDFDocument automatically)
+      if (pageIndex > 0) doc.addPage({ size: "A4", layout: "landscape", margin: 40 });
 
-    let subtotalQty = 0;
-    let totalValue = 0;
-    let totalRevenue = 0;
+      // Company header only on first page
+      if (pageIndex === 0) drawCompanyHeader();
 
-    const SAFE_LIMIT = 480;
+      // Determine start Y: if company header on page1 we start below divider, else top margin
+      let y = (pageIndex === 0) ? 150 : 40;
+      y = drawTableHeader(y);
 
-    for (const it of items) {
-      // ---------------------------------------
-      // PAGE BREAK WHEN FULL
-      // ---------------------------------------
-      if (y + rowHeight > SAFE_LIMIT) {
-        doc.addPage({ size: "A4", layout: "landscape", margin: 40 });
+      // Draw rows for this page
+      const start = pageIndex * ROWS_PER_PAGE;
+      const end = Math.min(start + ROWS_PER_PAGE, totalItems);
+      for (let i = start; i < end; i++) {
+        const it = items[i];
+        const qty = Number(it.quantity || 0);
+        const cost = Number(it.unitCost || 0);
+        const price = Number(it.unitPrice || 0);
+        const val = qty * cost;
+        const rev = qty * price;
 
-        y = 40; // top of page 2
-        y = drawTableHeader(y);
+        grandQty += qty;
+        grandValue += val;
+        grandRevenue += rev;
+
+        // Draw cell borders
+        doc.rect(cols.sku, y, widths.sku, rowHeight).stroke();
+        doc.rect(cols.name, y, widths.name, rowHeight).stroke();
+        doc.rect(cols.category, y, widths.category, rowHeight).stroke();
+        doc.rect(cols.qty, y, widths.qty, rowHeight).stroke();
+        doc.rect(cols.cost, y, widths.cost, rowHeight).stroke();
+        doc.rect(cols.price, y, widths.price, rowHeight).stroke();
+        doc.rect(cols.value, y, widths.value, rowHeight).stroke();
+        doc.rect(cols.revenue, y, widths.revenue, rowHeight).stroke();
+
+        // Fill text
+        doc.font("Helvetica").fontSize(9);
+        doc.text(it.sku || "", cols.sku + 3, y + 4);
+        doc.text(it.name || "", cols.name + 3, y + 4);
+        doc.text(it.category || "", cols.category + 3, y + 4);
+        doc.text(String(qty), cols.qty + 3, y + 4);
+        doc.text(`RM ${cost.toFixed(2)}`, cols.cost + 3, y + 4);
+        doc.text(`RM ${price.toFixed(2)}`, cols.price + 3, y + 4);
+        doc.text(`RM ${val.toFixed(2)}`, cols.value + 3, y + 4);
+        doc.text(`RM ${rev.toFixed(2)}`, cols.revenue + 3, y + 4);
+
+        y += rowHeight;
       }
 
-      // Calculate values
-      const qty = Number(it.quantity || 0);
-      const cost = Number(it.unitCost || 0);
-      const price = Number(it.unitPrice || 0);
+      // If this is the last page, draw totals box bottom-right
+      if (pageIndex === totalPages - 1) {
+        // place totals box near bottom but inside margin
+        const boxWidth = 250;
+        const boxHeight = 70;
+        // compute boxY: if current y is high, place at y + 20, otherwise near bottom (page height minus margin)
+        const candidateY = y + 20;
+        const maxBoxY = doc.page.height - 40 - boxHeight; // 40px margin bottom
+        const boxY = Math.min(candidateY, maxBoxY);
+        const boxX = doc.page.width - 40 - boxWidth; // right aligned inside margin
 
-      const val = qty * cost;
-      const rev = qty * price;
+        doc.rect(boxX, boxY, boxWidth, boxHeight).stroke();
+        doc.font("Helvetica-Bold").fontSize(10);
+        doc.text(`Subtotal (Quantity): ${grandQty} units`, boxX + 10, boxY + 10);
+        doc.text(`Total Inventory Value: RM ${grandValue.toFixed(2)}`, boxX + 10, boxY + 28);
+        doc.text(`Total Potential Revenue: RM ${grandRevenue.toFixed(2)}`, boxX + 10, boxY + 46);
+      }
+    } // end pages loop
 
-      subtotalQty += qty;
-      totalValue += val;
-      totalRevenue += rev;
-
-      // Draw row borders
-      doc.rect(cols.sku, y, widths.sku, rowHeight).stroke();
-      doc.rect(cols.name, y, widths.name, rowHeight).stroke();
-      doc.rect(cols.category, y, widths.category, rowHeight).stroke();
-      doc.rect(cols.qty, y, widths.qty, rowHeight).stroke();
-      doc.rect(cols.cost, y, widths.cost, rowHeight).stroke();
-      doc.rect(cols.price, y, widths.price, rowHeight).stroke();
-      doc.rect(cols.value, y, widths.value, rowHeight).stroke();
-      doc.rect(cols.revenue, y, widths.revenue, rowHeight).stroke();
-
-      doc.font("Helvetica").fontSize(9);
-      doc.text(it.sku || "", cols.sku + 3, y + 4);
-      doc.text(it.name || "", cols.name + 3, y + 4);
-      doc.text(it.category || "", cols.category + 3, y + 4);
-      doc.text(String(qty), cols.qty + 3, y + 4);
-      doc.text(`RM ${cost.toFixed(2)}`, cols.cost + 3, y + 4);
-      doc.text(`RM ${price.toFixed(2)}`, cols.price + 3, y + 4);
-      doc.text(`RM ${val.toFixed(2)}`, cols.value + 3, y + 4);
-      doc.text(`RM ${rev.toFixed(2)}`, cols.revenue + 3, y + 4);
-
-      y += rowHeight;
-    }
-
-    // ======================================
-    // TOTALS BOX ON LAST PAGE
-    // ======================================
-    const boxX = 560;
-    const boxWidth = 230;
-    const boxHeight = 68;
-    const boxY = Math.min(y + 20, 520);
-
-    doc.rect(boxX, boxY, boxWidth, boxHeight).stroke();
-
-    doc.font("Helvetica-Bold").fontSize(10);
-    doc.text(`Subtotal (Quantity): ${subtotalQty} units`, boxX + 10, boxY + 10);
-    doc.text(`Total Inventory Value: RM ${totalValue.toFixed(2)}`, boxX + 10, boxY + 28);
-    doc.text(`Total Potential Revenue: RM ${totalRevenue.toFixed(2)}`, boxX + 10, boxY + 46);
-
-    // ======================================
-    // PAGE NUMBERS + FOOTERS
-    // ======================================
-    const range = doc.bufferedPageRange(); // {start, count}
-
+    // Add page numbers + footer (centered) to every page (after content is drawn)
+    const range = doc.bufferedPageRange(); // { start, count }
     for (let i = 0; i < range.count; i++) {
       doc.switchToPage(i);
-
-      // page number center bottom
-      doc.font("Helvetica").fontSize(9);
-      doc.text(`Page ${i + 1} of ${range.count}`, 0, doc.page.height - 25, {
+      // Page number
+      doc.font("Helvetica").fontSize(9).text(`Page ${i + 1} of ${range.count}`, 0, doc.page.height - 30, {
         align: "center"
       });
-
-      // footer (every page)
-      doc.text("Generated by L&B Company Inventory System", 0, doc.page.height - 40, {
+      // Footer text
+      doc.text("Generated by L&B Company Inventory System", 0, doc.page.height - 45, {
         align: "center"
       });
     }
 
+    // Finish PDF
     doc.end();
   } catch (err) {
-    console.error("PDF failed:", err);
+    console.error("PDF generation error:", err);
     return res.status(500).json({ message: "PDF generation failed" });
   }
 });
