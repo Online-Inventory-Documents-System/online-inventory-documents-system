@@ -6,7 +6,7 @@ const cors = require('cors');
 const xlsx = require('xlsx');
 const mongoose = require('mongoose');
 const path = require('path');
-const PDFDocument = require('pdfkit'); // FIX 1: Add pdfkit for PDF generation
+const PDFDocument = require('pdfkit'); 
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -359,6 +359,27 @@ app.delete('/api/documents/:id', async (req, res) => {
   } catch(err) { console.error(err); return res.status(500).json({ message:'Server error' }); }
 });
 
+// ===== API: Simulated Document Download (ADDED) =====
+app.get('/api/documents/:id/download', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const doc = await Doc.findById(id).lean();
+        if (!doc) return res.status(404).json({ message: 'Document not found' });
+        
+        // Since storage is simulated, we return a simple dummy text file.
+        res.setHeader('Content-Type', 'text/plain');
+        res.setHeader('Content-Disposition', `attachment; filename="${doc.name}_Simulated_Download.txt"`);
+
+        await logActivity(req.headers['x-username'], `Simulated download of document: ${doc.name}`);
+
+        return res.send(`--- Simulated Download: ${doc.name} ---\n\nDocument ID: ${doc._id}\nFile Name: ${doc.name}\nSize: ${doc.size} bytes\nDate: ${doc.date.toISOString()}`);
+    } catch(err) { 
+        console.error('Download error:', err); 
+        return res.status(500).json({ message:'Server error during download simulation' }); 
+    }
+});
+
+
 // ===== Activity Log =====
 app.get('/api/log', async (req, res) => {
   try {
@@ -373,8 +394,8 @@ app.get('/api/log', async (req, res) => {
 // ===== Serve frontend =====
 app.use(express.static(path.join(__dirname, '../public')));
 
-// FIX 3: Change * to /* to resolve the PathError on Express 5.x/newer routers
-app.get('/*', (req, res) => {
+// FIX 3: Changed '/*' back to the single wildcard '*' to fix the PathError crash.
+app.get('*', (req, res) => {
   if (req.path.startsWith('/api/')) return res.status(404).json({ message:'API route not found' });
   // Always serve index.html for non-API routes (SPA setup)
   return res.sendFile(path.join(__dirname, '../public/index.html'));
