@@ -366,11 +366,11 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
     doc.flushPages();
 
 // ------------------------------------------------------
-// FOOTER ON EVERY PAGE (SAFE VERSION — NO BLANK PAGES)
+// FOOTER ON EVERY PAGE (SAFE — NO BLANK PAGES)
 // ------------------------------------------------------
-const pages = doc.bufferedPageRange(); // { start, count }
+const range = doc.bufferedPageRange(); // get total pages ONLY ONCE
 
-for (let i = 0; i < pages.count; i++) {
+for (let i = 0; i < range.count; i++) {
   doc.switchToPage(i);
 
   doc.font("Helvetica").fontSize(9).text(
@@ -381,14 +381,9 @@ for (let i = 0; i < pages.count; i++) {
   );
 }
 
+// FINALIZE PDF -> MUST BE LAST LINE
+doc.end();
 
-    doc.end();
-
-  } catch (err) {
-    console.error("PDF Error:", err);
-    res.status(500).json({ message: "PDF generation failed" });
-  }
-});
 
 // ============================================================================
 //                                   XLSX REPORT
