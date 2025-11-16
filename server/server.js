@@ -1,16 +1,16 @@
 // ======================================================================
 // FINAL SERVER.JS — MONGODB ATLAS VERSION (OPTION A)
-// Fully matched to your final script.js & all HTML pages
-// Supports Inventory, Orders, Sales, Documents, Company, Logs, Auth, PDFKit
+// With correct Render path + dotenv path
 // ======================================================================
 
-require("dotenv").config();
+const path = require("path");
+require("dotenv").config({ path: path.join(__dirname, ".env") });
+
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const multer = require("multer");
 const fs = require("fs");
-const path = require("path");
 const PDFDocument = require("pdfkit");
 
 const app = express();
@@ -19,18 +19,23 @@ const app = express();
 // ENVIRONMENT VARIABLES
 // ----------------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
-const MONGODB_URI = process.env.MONGODB_URI;   // MongoDB Atlas connection
-const SECURITY_CODE = process.env.SECRET_SECURITY_CODE || "123456"; // Registration code
+const MONGODB_URI = process.env.MONGODB_URI;
+const SECURITY_CODE = process.env.SECRET_SECURITY_CODE || "123456";
 
 // ----------------------------------------------------------------------
 // MIDDLEWARE
 // ----------------------------------------------------------------------
 app.use(express.json({ limit: "20mb" }));
 app.use(cors());
-app.use("/uploads", express.static("./uploads"));
-app.use("/", express.static("public")); // Serve frontend
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-if (!fs.existsSync("./uploads")) fs.mkdirSync("./uploads");
+// ✅ FIXED STATIC PATH FOR YOUR FOLDER STRUCTURE
+// /server/server.js → ../public
+app.use("/", express.static(path.join(__dirname, "../public")));
+
+if (!fs.existsSync(path.join(__dirname, "uploads"))) {
+  fs.mkdirSync(path.join(__dirname, "uploads"));
+}
 
 // ----------------------------------------------------------------------
 // MONGODB CONNECTION
@@ -41,7 +46,7 @@ mongoose
   .catch((err) => console.error("MongoDB Connection Error:", err));
 
 // ----------------------------------------------------------------------
-// MONGOOSE SCHEMAS
+// MONGOOSE SCHEMAS AND MODELS
 // ----------------------------------------------------------------------
 const userSchema = new mongoose.Schema({
   username: String,
@@ -99,9 +104,6 @@ const logSchema = new mongoose.Schema({
   time: String
 });
 
-// ----------------------------------------------------------------------
-// MONGOOSE MODELS
-// ----------------------------------------------------------------------
 const User = mongoose.model("User", userSchema);
 const Inventory = mongoose.model("Inventory", inventorySchema);
 const Order = mongoose.model("Order", orderSchema);
@@ -114,7 +116,7 @@ const Log = mongoose.model("Log", logSchema);
 // MULTER — File Uploads
 // ----------------------------------------------------------------------
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, "./uploads"),
+  destination: (req, file, cb) => cb(null, path.join(__dirname, "uploads")),
   filename: (req, file, cb) => {
     const unique = Date.now() + "-" + Math.round(Math.random() * 99999);
     cb(null, unique + path.extname(file.originalname));
@@ -125,27 +127,25 @@ const upload = multer({ storage });
 // ======================================================================
 // AUTHENTICATION
 // ======================================================================
-
-// LOGIN
 app.post("/api/auth/login", async (req, res) => {
-  const { username, password } = req.body;
-  const found = await User.findOne({ username, password });
+  const found = await User.findOne({
+    username: req.body.username,
+    password: req.body.password
+  });
+
   if (!found) return res.json({ success: false, message: "Invalid login" });
   res.json({ success: true });
 });
 
-// REGISTER
 app.post("/api/auth/register", async (req, res) => {
-  const { username, password, code } = req.body;
-
-  if (code !== SECURITY_CODE)
+  if (req.body.code !== SECURITY_CODE)
     return res.json({ success: false, message: "Security code incorrect" });
 
-  const exists = await User.findOne({ username });
-  if (exists) return res.json({ success: false, message: "User already exists" });
+  const exists = await User.findOne({ username: req.body.username });
+  if (exists) return res.json({ success: false, message: "User exists" });
 
-  await User.create({ username, password });
-  res.json({ success: true, message: "User registered" });
+  await User.create({ username: req.body.username, password: req.body.password });
+  res.json({ success: true });
 });
 
 // ======================================================================
@@ -156,8 +156,7 @@ app.get("/api/inventory", async (req, res) => {
 });
 
 app.post("/api/inventory", async (req, res) => {
-  const item = await Inventory.create(req.body);
-  res.json(item);
+  res.json(await Inventory.create(req.body));
 });
 
 app.put("/api/inventory/:id", async (req, res) => {
@@ -180,8 +179,7 @@ app.get("/api/orders", async (req, res) => {
 app.post("/api/orders", async (req, res) => {
   const count = await Order.countDocuments();
   const orderNo = "ORD-" + (100000 + count);
-  const order = await Order.create({ ...req.body, orderNo });
-  res.json(order);
+  res.json(await Order.create({ ...req.body, orderNo }));
 });
 
 app.put("/api/orders/:id", async (req, res) => {
@@ -204,8 +202,7 @@ app.get("/api/sales", async (req, res) => {
 app.post("/api/sales", async (req, res) => {
   const count = await Sale.countDocuments();
   const saleNo = "SAL-" + (100000 + count);
-  const sale = await Sale.create({ ...req.body, saleNo });
-  res.json(sale);
+  res.json(await Sale.create({ ...req.body, saleNo }));
 });
 
 app.put("/api/sales/:id", async (req, res) => {
@@ -226,27 +223,30 @@ app.get("/api/documents", async (req, res) => {
 });
 
 app.post("/api/documents", upload.single("file"), async (req, res) => {
-  const doc = await DocumentFile.create({
-    filename: req.file.filename,
-    originalname: req.file.originalname,
-    uploadDate: new Date().toISOString()
-  });
-  res.json(doc);
+  res.json(
+    await DocumentFile.create({
+      filename: req.file.filename,
+      originalname: req.file.originalname,
+      uploadDate: new Date().toISOString()
+    })
+  );
 });
 
 app.delete("/api/documents/:id", async (req, res) => {
   const doc = await DocumentFile.findById(req.params.id);
-  if (doc) fs.unlinkSync("./uploads/" + doc.filename);
+  if (doc) {
+    const pathFile = path.join(__dirname, "uploads", doc.filename);
+    if (fs.existsSync(pathFile)) fs.unlinkSync(pathFile);
+  }
   await DocumentFile.findByIdAndDelete(req.params.id);
   res.json({ success: true });
 });
 
 // ======================================================================
-// COMPANY INFO
+// COMPANY
 // ======================================================================
 app.get("/api/company", async (req, res) => {
-  const data = await Company.findOne();
-  res.json(data || {});
+  res.json((await Company.findOne()) || {});
 });
 
 app.post("/api/company", async (req, res) => {
@@ -256,7 +256,7 @@ app.post("/api/company", async (req, res) => {
 });
 
 // ======================================================================
-// ACTIVITY LOGS
+// LOGS
 // ======================================================================
 app.get("/api/logs", async (req, res) => {
   res.json(await Log.find());
@@ -268,25 +268,25 @@ app.post("/api/logs", async (req, res) => {
 });
 
 // ======================================================================
-// PDF REPORTS — Invoice Style (Inventory / Order / Sale)
+// PDF HELPERS
 // ======================================================================
 function pdfHeader(doc, company, title, meta) {
-  doc.fontSize(14).text(company.name || "L&B Company");
-  doc.fontSize(10).text(company.address || "Jalan Mawar 8, Melaka");
+  doc.fontSize(16).text(company.name || "L&B Company");
+  doc.fontSize(10).text(company.address || "");
   doc.text(company.phone || "");
   doc.text(company.email || "");
   doc.moveDown();
-
   doc.fontSize(16).text(title, { align: "right" });
   doc.fontSize(10).text(`No: ${meta.no}`, { align: "right" });
   doc.text(`Date: ${meta.date}`, { align: "right" });
   doc.text(`Status: ${meta.status}`, { align: "right" });
 }
 
-function pdfTableHeader(doc) {
-  doc.moveDown().fontSize(12).text("Items", { underline: true });
-  doc.fontSize(10);
+function pdfTable(doc) {
+  doc.moveDown();
+  doc.fontSize(12).text("Items", { underline: true });
   doc.moveDown(0.5);
+  doc.fontSize(10);
   doc.text("Item", 50);
   doc.text("SKU", 200);
   doc.text("Qty", 300);
@@ -295,18 +295,14 @@ function pdfTableHeader(doc) {
   doc.moveDown();
 }
 
-function pdfFooter(doc) {
-  doc.moveDown(2);
-  doc.text("Thank you for your business.");
-  doc.text("Generated by L&B Inventory System");
-}
-
-// ------------------- Inventory PDF -------------------
+// ======================================================================
+// PDF ROUTES
+// ======================================================================
 app.get("/api/report/inventory/pdf", async (req, res) => {
   const inventory = await Inventory.find();
-  const company = await Company.findOne() || {};
-
+  const company = (await Company.findOne()) || {};
   const doc = new PDFDocument({ margin: 40 });
+
   res.setHeader("Content-Type", "application/pdf");
   doc.pipe(res);
 
@@ -316,9 +312,9 @@ app.get("/api/report/inventory/pdf", async (req, res) => {
     status: "Generated"
   });
 
-  pdfTableHeader(doc);
+  pdfTable(doc);
 
-  inventory.forEach(i => {
+  inventory.forEach((i) => {
     doc.text(i.name, 50);
     doc.text(i.sku, 200);
     doc.text(i.quantity, 300);
@@ -327,18 +323,15 @@ app.get("/api/report/inventory/pdf", async (req, res) => {
     doc.moveDown();
   });
 
-  pdfFooter(doc);
   doc.end();
 });
 
-// ------------------- Order PDF -------------------
 app.get("/api/report/order/:id/pdf", async (req, res) => {
   const order = await Order.findById(req.params.id);
   if (!order) return res.sendStatus(404);
-
-  const company = await Company.findOne() || {};
-
+  const company = (await Company.findOne()) || {};
   const doc = new PDFDocument({ margin: 40 });
+
   res.setHeader("Content-Type", "application/pdf");
   doc.pipe(res);
 
@@ -348,13 +341,9 @@ app.get("/api/report/order/:id/pdf", async (req, res) => {
     status: order.status
   });
 
-  doc.moveDown();
-  doc.text(`Bill To: ${order.customer}`);
-  doc.text(`Contact: ${order.contact}`);
+  pdfTable(doc);
 
-  pdfTableHeader(doc);
-
-  order.items.forEach(i => {
+  order.items.forEach((i) => {
     doc.text(i.name, 50);
     doc.text(i.sku, 200);
     doc.text(i.qty, 300);
@@ -363,22 +352,18 @@ app.get("/api/report/order/:id/pdf", async (req, res) => {
     doc.moveDown();
   });
 
-  doc.moveDown();
   doc.text(`Subtotal: RM ${order.subtotal}`);
   doc.text(`Total: RM ${order.total}`);
 
-  pdfFooter(doc);
   doc.end();
 });
 
-// ------------------- Sale PDF -------------------
 app.get("/api/report/sale/:id/pdf", async (req, res) => {
   const sale = await Sale.findById(req.params.id);
   if (!sale) return res.sendStatus(404);
-
-  const company = await Company.findOne() || {};
-
+  const company = (await Company.findOne()) || {};
   const doc = new PDFDocument({ margin: 40 });
+
   res.setHeader("Content-Type", "application/pdf");
   doc.pipe(res);
 
@@ -388,13 +373,9 @@ app.get("/api/report/sale/:id/pdf", async (req, res) => {
     status: sale.status
   });
 
-  doc.moveDown();
-  doc.text(`Customer: ${sale.customer}`);
-  doc.text(`Contact: ${sale.contact}`);
+  pdfTable(doc);
 
-  pdfTableHeader(doc);
-
-  sale.items.forEach(i => {
+  sale.items.forEach((i) => {
     doc.text(i.name, 50);
     doc.text(i.sku, 200);
     doc.text(i.qty, 300);
@@ -403,15 +384,15 @@ app.get("/api/report/sale/:id/pdf", async (req, res) => {
     doc.moveDown();
   });
 
-  doc.moveDown();
   doc.text(`Subtotal: RM ${sale.subtotal}`);
   doc.text(`Total: RM ${sale.total}`);
 
-  pdfFooter(doc);
   doc.end();
 });
 
 // ======================================================================
 // START SERVER
 // ======================================================================
-app.listen(PORT, () => console.log(`Server running on PORT ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
+});
