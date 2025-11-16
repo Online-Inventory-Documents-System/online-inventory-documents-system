@@ -12,7 +12,7 @@
   <nav>
     <a href="index.html">Home</a>
     <a href="inventory.html">Inventory</a>
-    <a href="documents.html" class="active">Documents</a>
+    <a href="documents.html">Documents</a>
     <a href="log.html">Activity Log</a>
     <a href="setting.html" style="text-decoration: none;"><button>⚙️ Setting</button></a>
     <button onclick="toggleTheme()">🌓 Mode</button>
@@ -23,14 +23,10 @@
 
 <section>
   <h2>Upload & Manage Documents</h2>
-  
-  <div class="controls admin-only" style="margin-bottom: 15px;">
+  <div class="controls" style="margin-bottom: 15px;">
     <input type="file" id="docUpload" multiple />
     <button id="uploadDocsBtn" class="primary-btn">📤 Upload (Simulated)</button>
-  </div>
-
-  <div style="margin-bottom: 15px;">
-    <input type="text" id="searchDocs" placeholder="Search document metadata..." />
+    <input type="text" id="searchDocs" placeholder="Search document metadata..." style="margin-left: 10px;" />
     <p id="uploadMessage" style="margin-top:10px;"></p>
   </div>
 
@@ -54,38 +50,9 @@
 <!-- JS -->
 <script src="js/setting.js" defer></script>
 <script src="js/script.js" defer></script>
-
 <script>
-document.documentElement.dataset.page = 'documents';
-
-// --------------------------------------------------
-// ROLE-BASED ACCESS CONTROL (Admin / User)
-// --------------------------------------------------
-window.addEventListener("DOMContentLoaded", () => {
-  const role = sessionStorage.getItem("role");
-  const username = sessionStorage.getItem("username");
-
-  // Display logged-in user name + role
-  if (username) {
-    document.getElementById("adminName").textContent = username + " (" + role + ")";
-  }
-
-  // If user is NOT admin → restrict permissions
-  if (role !== "admin") {
-    // Hide upload controls
-    document.querySelectorAll(".admin-only").forEach(el => {
-      el.style.display = "none";
-    });
-
-    // Hide Actions column
-    const actionHeaders = document.querySelectorAll("th.actions");
-    const actionCells = document.querySelectorAll("td.actions");
-
-    actionHeaders.forEach(th => th.style.display = "none");
-    actionCells.forEach(td => td.style.display = "none");
-  }
-});
+  // Let script.js know current page for binding
+  document.documentElement.dataset.page = 'documents';
 </script>
-
 </body>
 </html>
