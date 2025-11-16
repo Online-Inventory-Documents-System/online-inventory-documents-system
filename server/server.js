@@ -6,7 +6,7 @@ const cors = require('cors');
 const xlsx = require('xlsx');
 const mongoose = require('mongoose');
 const path = require('path');
-const PDFDocument = require('pdfkit');   // ✅ Required for PDF Reports
+const PDFDocument = require('pdfkit');   // PDF Reports
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -78,7 +78,7 @@ async function logActivity(user, action){
       const lastAction = last.action || '';
       const lastTime = last.time ? new Date(last.time).getTime() : 0;
       if (lastUser === safeUser && lastAction === safeAction && (now - lastTime) <= DUPLICATE_WINDOW_MS) {
-        return; // avoid duplicates
+        return;
       }
     }
     await ActivityLog.create({ user: safeUser, action: safeAction, time: new Date() });
@@ -87,13 +87,8 @@ async function logActivity(user, action){
   }
 }
 
-// ===== Health Check =====
-app.get('/api/test', (req, res) =>
-  res.json({ success:true, message:'API is up', time: new Date().toISOString() })
-);
-
 // ============================================================================
-//                               AUTH SYSTEM
+// AUTH SYSTEM
 // ============================================================================
 app.post('/api/register', async (req, res) => {
   const { username, password, securityCode } = req.body || {};
@@ -173,7 +168,7 @@ app.delete('/api/account', async (req, res) => {
 });
 
 // ============================================================================
-//                                 INVENTORY CRUD
+// INVENTORY CRUD
 // ============================================================================
 app.get('/api/inventory', async (req, res) => {
   try {
@@ -226,206 +221,132 @@ app.delete('/api/inventory/:id', async (req, res) => {
     return res.status(500).json({ message:'Server error' });
   }
 });
-
 // ============================================================================
-//                  PDF REPORT — A4 LANDSCAPE — SINGLE PAGE (Medium Density)
+// PDF REPORT — A4 LANDSCAPE — SINGLE PAGE — TINY TABLE — 8 COLUMNS
 // ============================================================================
-
 app.get('/api/inventory/report/pdf', async (req, res) => {
   try {
     const items = await Inventory.find({}).lean();
     const now = new Date();
     const filename = `Inventory_Report_${now.toISOString().slice(0,10)}.pdf`;
 
-    // A4 landscape single page, no buffering (single page only)
+    // A4 Landscape, single page
     const doc = new PDFDocument({
       size: "A4",
       layout: "landscape",
-      margin: 36 // slightly tighter margins for more space
+      margin: 25,
     });
 
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.setHeader("Content-Type", "application/pdf");
-
     doc.pipe(res);
 
-    // helpers
-    const pad = (n) => n.toString().padStart(2, '0');
-    function formatDateTime(d) {
-      // format DD/MM/YYYY HH:MM
-      const day = pad(d.getDate());
-      const month = pad(d.getMonth() + 1);
-      const year = d.getFullYear();
-      const hours = pad(d.getHours());
-      const mins = pad(d.getMinutes());
-      return `${day}/${month}/${year} ${hours}:${mins}`;
-    }
+    // ====== FIXED HEADER ======
+    doc.font("Helvetica-Bold").fontSize(20).text("L&B Company", 25, 25);
+    doc.font("Helvetica").fontSize(10);
+    doc.text("Jalan Mawar 8, Taman Bukit Beruang Permai, Melaka", 25, 50);
+    doc.text("Phone: 01133127622", 25, 64);
+    doc.text("Email: lbcompany@gmail.com", 25, 78);
 
-    // Page metrics
-    const pageWidth = doc.page.width;
-    const pageHeight = doc.page.height;
-    const margin = doc.page.margins.left; // 36
-    const usableWidth = pageWidth - margin * 2;
-    const usableHeight = pageHeight - margin * 2;
+    doc.font("Helvetica-Bold").fontSize(18).text("INVENTORY REPORT", 500, 25);
+    doc.font("Helvetica").fontSize(10);
+    doc.text(`Report #: REP-${Date.now()}`, 500, 50);
+    doc.text(`Date: ${now.toLocaleDateString()}`, 500, 64);
 
-    // HEADER (exactly as requested)
-    const headerLeftX = margin;
-    const headerRightX = pageWidth - margin - 260; // meta block width ~260
-    const headerTopY = margin;
+    // ====== TABLE COLUMNS (8 COLS) ======
+    const col = {
+      sku: 25,
+      name: 110,
+      cat: 330,
+      qty: 420,
+      cost: 475,
+      price: 540,
+      value: 610,
+      revenue: 710
+    };
 
-    doc.font('Helvetica-Bold').fontSize(18).text('L&B Company', headerLeftX, headerTopY);
-    doc.font('Helvetica').fontSize(10).text('Jalan Mawar 8, Taman Bukit Beruang Permai, Melaka', headerLeftX, headerTopY + 22);
-    doc.text('Phone: 01133127622', headerLeftX, headerTopY + 36);
-    doc.text('Email: lbcompany@gmail.com', headerLeftX, headerTopY + 50);
+    let y = 115;
 
-    doc.font('Helvetica-Bold').fontSize(16).text('INVENTORY REPORT', headerRightX, headerTopY);
-    doc.font('Helvetica').fontSize(10).text(`Report #: REP-${Date.now()}`, headerRightX, headerTopY + 22);
-    doc.text(`Date: ${formatDateTime(now)}`, headerRightX, headerTopY + 36);
-    doc.text('Status: Generated', headerRightX, headerTopY + 50);
+    // ====== TABLE HEADER ======
+    doc.font("Helvetica-Bold").fontSize(9);
 
-    // Move cursor down after header area
-    const headerBottomY = headerTopY + 74;
-    let cursorY = headerBottomY + 6;
+    doc.text("SKU", col.sku, y);
+    doc.text("NAME", col.name, y);
+    doc.text("CAT", col.cat, y);
+    doc.text("QTY", col.qty, y);
+    doc.text("UNIT COST", col.cost, y);
+    doc.text("UNIT PRICE", col.price, y);
+    doc.text("INVENTORY VALUE", col.value, y);
+    doc.text("REVENUE", col.revenue, y);
 
-    // Columns definition (initial guesses)
-    let columns = [
-      { key: 'sku', label: 'SKU', width: 110 },
-      { key: 'name', label: 'Name', width: 300 },
-      { key: 'category', label: 'Category', width: 180 },
-      { key: 'quantity', label: 'Quantity', width: 60, align: 'right' },
-      { key: 'unitCost', label: 'Unit Cost', width: 80, align: 'right' },
-      { key: 'unitPrice', label: 'Unit Price', width: 80, align: 'right' },
-      { key: 'invValue', label: 'Total Inventory Value', width: 110, align: 'right' },
-      { key: 'revenue', label: 'Total Potential Revenue', width: 120, align: 'right' }
-    ];
+    y += 12;
 
-    // Ensure total columns width fits usableWidth. If not, scale down proportionally.
-    const totalColsWidth = columns.reduce((s,c) => s + c.width, 0);
-    if (totalColsWidth > usableWidth) {
-      const scale = usableWidth / totalColsWidth;
-      let accX = margin;
-      columns = columns.map(c => {
-        const w = Math.floor(c.width * scale);
-        const col = { ...c, width: w, x: accX };
-        accX += w;
-        return col;
-      });
-    } else {
-      // compute x positions
-      let accX = margin;
-      columns = columns.map(c => ({ ...c, x: accX, width: c.width }));
-      accX += c => c.width;
-    }
+    // Header border
+    doc.moveTo(25, y).lineTo(820, y).stroke();
 
-    // Table header
-    doc.font('Helvetica-Bold').fontSize(10);
-    columns.forEach(c => {
-      doc.text(c.label, c.x, cursorY, { width: c.width, align: c.align || 'left' });
-    });
-
-    cursorY += 16;
-    // horizontal rule
-    doc.moveTo(margin, cursorY).lineTo(pageWidth - margin, cursorY).stroke();
-
-    // Prepare rows
-    const headerHeightSpace = cursorY; // y where rows start
-    // initial font size and row height for medium density
-    let fontSize = 10;
-    let rowHeight = 14;
-
-    // compute how many rows fit at current font/rowHeight
-    const footerSpace = 70; // space reserved for totals + footer
-    const availableRowsArea = pageHeight - cursorY - footerSpace - margin;
-    let maxRows = Math.floor(availableRowsArea / rowHeight);
-
-    // If too many rows, scale font/row height proportionally but keep readable
-    if (items.length > maxRows) {
-      const scale = maxRows / items.length;
-      // scale font between min 6 and original
-      const minFont = 7;
-      fontSize = Math.max(minFont, Math.floor(fontSize * Math.max(scale, 0.5)));
-      // adjust rowHeight accordingly
-      rowHeight = Math.max(10, Math.floor(rowHeight * (fontSize / 10)));
-      maxRows = Math.floor(availableRowsArea / rowHeight);
-      // If still not enough (extreme case), we will allow tighter rows by reducing rowHeight further until fits or min row height reached
-      let attempts = 0;
-      while (items.length > maxRows && attempts < 5) {
-        rowHeight = Math.max(9, Math.floor(rowHeight * 0.9));
-        maxRows = Math.floor(availableRowsArea / rowHeight);
-        attempts++;
-      }
-    }
-
-    // draw rows (single page, no page breaks)
-    doc.font('Helvetica').fontSize(fontSize);
-    let totalInvValue = 0;
+    // ====== TABLE ROWS ======
+    let totalValue = 0;
     let totalRevenue = 0;
 
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i];
+    doc.font("Helvetica").fontSize(8);
+
+    items.forEach((it, idx) => {
       const qty = Number(it.quantity || 0);
       const uc = Number(it.unitCost || 0);
       const up = Number(it.unitPrice || 0);
       const invVal = qty * uc;
-      const revenue = qty * up;
-      totalInvValue += invVal;
-      totalRevenue += revenue;
+      const rev = qty * up;
 
-      // zebra
-      if (i % 2 === 1) {
+      totalValue += invVal;
+      totalRevenue += rev;
+
+      // Zebra stripe
+      if (idx % 2 === 1) {
         doc.save();
-        doc.rect(margin, cursorY - 2, usableWidth, rowHeight).fillOpacity(0.12).fill('#ededed');
+        doc.fillOpacity(0.12);
+        doc.rect(25, y - 2, 795, 12).fill("#cccccc");
         doc.restore();
       }
 
-      // Write each cell with ellipsis to prevent overflow to next cell
-      columns.forEach(c => {
-        let text = '';
-        if (c.key === 'sku') text = it.sku || '';
-        else if (c.key === 'name') text = it.name || '';
-        else if (c.key === 'category') text = it.category || '';
-        else if (c.key === 'quantity') text = String(qty);
-        else if (c.key === 'unitCost') text = `RM ${uc.toFixed(2)}`;
-        else if (c.key === 'unitPrice') text = `RM ${up.toFixed(2)}`;
-        else if (c.key === 'invValue') text = `RM ${invVal.toFixed(2)}`;
-        else if (c.key === 'revenue') text = `RM ${revenue.toFixed(2)}`;
+      // Row text
+      doc.text(it.sku || "", col.sku, y);
+      doc.text(it.name || "", col.name, y, { width: 200 });
+      doc.text(it.category || "", col.cat, y, { width: 80 });
+      doc.text(String(qty), col.qty, y);
+      doc.text(`RM ${uc.toFixed(2)}`, col.cost, y);
+      doc.text(`RM ${up.toFixed(2)}`, col.price, y);
+      doc.text(`RM ${invVal.toFixed(2)}`, col.value, y);
+      doc.text(`RM ${rev.toFixed(2)}`, col.revenue, y);
 
-        // If text too long, use options to truncate (ellipsis)
-        doc.text(text, c.x, cursorY, { width: c.width, align: c.align || 'left', ellipsis: true });
-      });
+      y += 12;
+    });
 
-      cursorY += rowHeight;
-      // safety: if cursorY exceeds page height (shouldn't happen due to scaling) break
-      if (cursorY + rowHeight + footerSpace >= pageHeight - margin) {
-        // we've reached bottom — stop drawing further rows (they won't fit on single page)
-        // Option: we could keep drawing smaller, but we've already attempted scaling above.
-        break;
-      }
-    }
+    // Bottom border
+    doc.moveTo(25, y).lineTo(820, y).stroke();
 
-    // Totals area (right aligned)
-    const totalsY = pageHeight - margin - 50;
-    doc.font('Helvetica-Bold').fontSize(Math.max(10, fontSize));
-    const totalsRightX = pageWidth - margin;
-    doc.text(`TOTAL INVENTORY VALUE: RM ${totalInvValue.toFixed(2)}`, margin, totalsY, { align: 'right', width: usableWidth });
-    doc.text(`TOTAL POTENTIAL REVENUE: RM ${totalRevenue.toFixed(2)}`, margin, totalsY + 16, { align: 'right', width: usableWidth });
+    // ===== TOTALS =====
+    y += 10;
+    doc.font("Helvetica-Bold").fontSize(10);
+    doc.text(`TOTAL INVENTORY VALUE: RM ${totalValue.toFixed(2)}`, 25, y, { align: "left" });
+    y += 12;
+    doc.text(`TOTAL POTENTIAL REVENUE: RM ${totalRevenue.toFixed(2)}`, 25, y, { align: "left" });
 
-    // Footer center
-    doc.font('Helvetica').fontSize(9);
-    doc.text('Thank you for your business.', margin, pageHeight - margin - 20, { align: 'center', width: usableWidth });
-    doc.text('Generated by L&B Inventory System', margin, pageHeight - margin - 8, { align: 'center', width: usableWidth });
+    // ===== FOOTER =====
+    doc.font("Helvetica").fontSize(9);
+    doc.text("Thank you for your business.", 0, 550, { align: "center" });
+    doc.text("Generated by L&B Inventory System", 0, 565, { align: "center" });
 
-    // Close PDF
     doc.end();
 
   } catch (err) {
-    console.error('PDF generate error', err);
-    return res.status(500).json({ message:"PDF generation failed" });
+    console.error("PDF generate error", err);
+    return res.status(500).json({ message: "PDF generation failed" });
   }
 });
 
+
 // ============================================================================
-//                               XLSX REPORT (UNCHANGED)
+// XLSX REPORT (unchanged)
 // ============================================================================
 app.get('/api/inventory/report', async (req, res) => {
   try {
@@ -475,7 +396,6 @@ app.get('/api/inventory/report', async (req, res) => {
     const wb_out = xlsx.write(wb, { type:'buffer', bookType:'xlsx' });
 
     await Doc.create({ name: filename, size: wb_out.length, date:new Date() });
-    await logActivity(req.headers['x-username'], `Generated and saved Inventory Report: ${filename}`);
 
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -487,8 +407,9 @@ app.get('/api/inventory/report', async (req, res) => {
   }
 });
 
+
 // ============================================================================
-//                               DOCUMENTS CRUD
+// DOCUMENTS CRUD
 // ============================================================================
 app.get('/api/documents', async (req, res) => {
   try {
@@ -503,9 +424,8 @@ app.get('/api/documents', async (req, res) => {
 
 app.post('/api/documents', async (req, res) => {
   try {
-    const doc = await Doc.create({ ...req.body, date:new Date() });
-    await logActivity(req.headers['x-username'], `Uploaded document metadata: ${doc.name}`);
-    const normalized = { ...doc.toObject(), id: doc._id.toString() };
+    const docItem = await Doc.create({ ...req.body, date:new Date() });
+    const normalized = { ...docItem.toObject(), id: docItem._id.toString() };
     return res.status(201).json(normalized);
   } catch(err){
     console.error(err);
@@ -515,11 +435,10 @@ app.post('/api/documents', async (req, res) => {
 
 app.delete('/api/documents/:id', async (req, res) => {
   try {
-    const doc = await Doc.findByIdAndDelete(req.params.id);
-    if (!doc)
+    const docItem = await Doc.findByIdAndDelete(req.params.id);
+    if (!docItem)
       return res.status(404).json({ message:'Document not found' });
 
-    await logActivity(req.headers['x-username'], `Deleted document metadata: ${doc.name}`);
     return res.status(204).send();
   } catch(err){
     console.error(err);
@@ -527,16 +446,9 @@ app.delete('/api/documents/:id', async (req, res) => {
   }
 });
 
-app.get('/api/documents/download/:filename', async (req, res) => {
-  const filename = req.params.filename || '';
-  if (filename.startsWith('Inventory_Report')) {
-    return res.redirect('/api/inventory/report');
-  }
-  return res.status(404).json({ message:"File not found or download unavailable on this mock server." });
-});
 
 // ============================================================================
-//                                      LOGS
+// LOGS
 // ============================================================================
 app.get('/api/logs', async (req, res) => {
   try {
@@ -553,8 +465,9 @@ app.get('/api/logs', async (req, res) => {
   }
 });
 
+
 // ============================================================================
-//                              SERVE FRONTEND
+// FRONTEND SERVE
 // ============================================================================
 app.use(express.static(path.join(__dirname, '../public')));
 
@@ -565,15 +478,15 @@ app.get('*', (req, res) => {
   return res.sendFile(path.join(__dirname, '../public/index.html'));
 });
 
+
 // ============================================================================
-//                           Start Helpers + Server
+// START SERVER
 // ============================================================================
 async function ensureDefaultAdminAndStartupLog() {
   try {
     const count = await User.countDocuments({}).exec();
     if (count === 0) {
       await User.create({ username:'admin', password:'password' });
-      await logActivity('System', 'Default admin user created.');
       console.log('Default admin user created.');
     }
 
