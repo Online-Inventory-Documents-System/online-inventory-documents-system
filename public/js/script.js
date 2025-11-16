@@ -142,8 +142,6 @@ function renderLogs() {
   renderDashboardData();
 }
 
-  renderDashboardData();
-}
 
 function renderDashboardData(){
   const tbody = qs('#recentActivities');
@@ -573,4 +571,5 @@ window.openEditPageForItem = openEditPageForItem;
 window.confirmAndDeleteItem = confirmAndDeleteItem;
 window.downloadDocument = downloadDocument;
 window.deleteDocumentConfirm = deleteDocumentConfirm;
+
 
