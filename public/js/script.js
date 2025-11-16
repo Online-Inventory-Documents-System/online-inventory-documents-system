@@ -1,1082 +1,963 @@
-// public/js/script.js
-// Complete client-side script for Online Inventory & Documents System
-// Updated for Orders, Sales, Company Config, Auto-Calculations, and PDF/Excel Reports
+// ======================================================
+// GLOBAL CONFIG
+// ======================================================
+const API_BASE = "https://online-inventory-documents-system.onrender.com/api";
 
-const API_BASE = window.location.hostname.includes('localhost')
-  ? "http://localhost:3000/api"
-  : "https://online-inventory-documents-system-olzt.onrender.com/api"; // change if needed
+// Store user session
+let currentUser = JSON.parse(sessionStorage.getItem("user")) || null;
 
-// Utilities
-const qs = (s) => document.querySelector(s);
-const qsa = (s) => Array.from(document.querySelectorAll(s));
-const showMsg = (el, text, color = 'red') => { if (!el) return; el.textContent = text; el.style.color = color; };
-const escapeHtml = (s) => s ? String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])) : '';
-const getUsername = () => sessionStorage.getItem('adminName') || 'Guest';
-const moneyFormat = (num) => `RM ${Number(num || 0).toFixed(2)}`;
+// Helper: GET JSON
+async function apiGET(url) {
+  const res = await fetch(url);
+  return res.json();
+}
 
+// Helper: POST JSON
+async function apiPOST(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+// Helper: PUT JSON
+async function apiPUT(url, body) {
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+// Helper: DELETE
+async function apiDELETE(url) {
+  const res = await fetch(url, { method: "DELETE" });
+  return res.json();
+}
+
+// ======================================================
+// AUTHENTICATION + ON-PAGE LOAD HANDLING
+// ======================================================
+document.addEventListener("DOMContentLoaded", () => {
+  const page = document.documentElement.dataset.page;
+
+  // Block pages if not logged in
+  if (!currentUser && page !== "login") {
+    window.location.href = "login.html";
+    return;
+  }
+
+  // Auto-fill username
+  if (currentUser) {
+    const adminName = document.getElementById("adminName");
+    if (adminName) adminName.textContent = currentUser.username;
+  }
+
+  // Page Router
+  switch (page) {
+    case "index":
+      break;
+
+    case "inventory":
+      initInventoryPage();
+      break;
+
+    case "documents":
+      initDocumentsPage();
+      break;
+
+    case "orders":
+      initOrdersPage();
+      break;
+
+    case "sales":
+      initSalesPage();
+      break;
+
+    case "product":
+      initProductEditPage();
+      break;
+
+    case "log":
+      loadActivityLog();
+      break;
+
+    case "company":
+      loadCompanyInfo();
+      bindCompanyEvents();
+      break;
+
+    case "setting":
+      break;
+
+    default:
+      break;
+  }
+});
+
+// Logout
+function logout() {
+  sessionStorage.clear();
+  window.location.href = "login.html";
+}
+
+// Dark mode
+function toggleTheme() {
+  document.body.classList.toggle("dark");
+}
+
+// Log Activity to Server
+async function logActivity(action) {
+  await apiPOST(`${API_BASE}/log`, {
+    user: currentUser?.username || "Unknown",
+    action,
+    time: new Date().toISOString(),
+  });
+}
+// ======================================================
+// INVENTORY MODULE
+// ======================================================
 let inventory = [];
-let activityLog = [];
-let documents = [];
-let orders = []; 
-let sales = []; 
-let companyConfig = { taxRate: 0.00 }; 
-const currentPage = window.location.pathname.split('/').pop();
 
-// Fetch wrapper
-async function apiFetch(url, options = {}) {
-  const user = getUsername();
-  options.headers = {
-    'Content-Type': 'application/json',
-    'X-Username': user,
-    ...options.headers
-  };
-  return fetch(url, options);
-}
-
-// Auth redirect (do not redirect when on login page)
-if(!sessionStorage.getItem('isLoggedIn') && !window.location.pathname.includes('login.html')) {
-  try { window.location.href = 'login.html'; } catch(e) {}
-}
-
-function logout(){
-  sessionStorage.removeItem('isLoggedIn');
-  sessionStorage.removeItem('adminName');
-  if(window.CONFIG && CONFIG.LS_THEME) localStorage.removeItem(CONFIG.LS_THEME);
-  window.location.href = 'login.html';
-}
-
-function toggleTheme(){
-  document.body.classList.toggle('dark-mode');
-  if(window.CONFIG && CONFIG.LS_THEME) {
-    localStorage.setItem(CONFIG.LS_THEME, document.body.classList.contains('dark-mode') ? 'dark' : 'light');
-  }
-}
-
-// ===== Common Fetch Functions (Updated fetchInventory for button binding) =====
-
-async function fetchInventory() {
-  try {
-    const res = await apiFetch(`${API_BASE}/inventory`);
-    inventory = await res.json();
-    inventory.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-    
-    if(currentPage.includes('inventory.html')) {
-        renderInventory(inventory);
-        
-        // Bind the new report buttons after successful fetch on inventory.html
-        const excelReportBtn = qs('#reportBtnExcel'); 
-        if (excelReportBtn) {
-            excelReportBtn.onclick = () => {
-                if(confirm('Confirm Generate Inventory Report (Excel)?')) {
-                    window.location.href = `${API_BASE}/inventory/report-excel`;
-                }
-            };
-        }
-
-        const pdfReportBtn = qs('#reportBtnPDF'); 
-        if (pdfReportBtn) {
-            pdfReportBtn.onclick = () => {
-                if(confirm('Confirm Generate Inventory Report (PDF)?')) {
-                    window.location.href = `${API_BASE}/inventory/report-pdf`;
-                }
-            };
-        }
-    }
-    
-    // Initialize Add/Edit Order/Sale pages once inventory is loaded
-    if(currentPage.includes('order.html')) initOrderSalePage(true);
-    if(currentPage.includes('sale.html')) initOrderSalePage(false);
-    return inventory;
-  } catch(e) { console.error('Error fetching inventory:', e); }
-}
-
-// Renamed for clarity in initDataFetch
-async function fetchInventoryData() {
-    await fetchInventory();
-}
-
-async function fetchOrders() {
-  try {
-    const res = await apiFetch(`${API_BASE}/orders`);
-    orders = await res.json();
-    if(currentPage.includes('orders.html')) renderOrders(orders);
-    if(currentPage.includes('index.html')) renderDashboardData(); 
-  } catch(e) { console.error('Error fetching orders:', e); }
-}
-
-async function fetchSales() {
-  try {
-    const res = await apiFetch(`${API_BASE}/sales`);
-    sales = await res.json();
-    if(currentPage.includes('sales.html')) renderSales(sales);
-    if(currentPage.includes('index.html')) renderDashboardData();
-  } catch(e) { console.error('Error fetching sales:', e); }
-}
-
-// --- LOGS and DOCUMENTS Fetch Functions ---
-async function fetchLogs() {
+// Load inventory from server
+async function loadInventory() {
   try {
-    const res = await apiFetch(`${API_BASE}/log`);
-    activityLog = await res.json();
-    activityLog.sort((a, b) => new Date(b.time) - new Date(a.time));
-    if(currentPage.includes('log.html')) renderLogs(activityLog);
-    if(currentPage.includes('index.html')) renderDashboardData();
-  } catch(e) { console.error('Error fetching logs:', e); }
+    const data = await apiGET(`${API_BASE}/inventory`);
+    inventory = Array.isArray(data) ? data : [];
+    renderInventoryTable();
+  } catch (err) {
+    console.error("loadInventory error", err);
+  }
 }
 
-async function fetchDocuments() {
-  try {
-    const res = await apiFetch(`${API_BASE}/documents`);
-    documents = await res.json();
-    documents.sort((a, b) => new Date(b.uploadTime) - new Date(a.uploadTime));
-    if(currentPage.includes('documents.html')) renderDocuments(documents);
-  } catch(e) { console.error('Error fetching documents:', e); }
+function renderInventoryTable() {
+  const tbody = document.getElementById("inventoryList") || document.getElementById("inventoryBody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+
+  let totalValue = 0;
+  let totalRevenue = 0;
+  let totalStock = 0;
+
+  inventory.forEach((item) => {
+    const qty = Number(item.quantity || 0);
+    const unitCost = Number(item.unitCost || 0);
+    const unitPrice = Number(item.unitPrice || 0);
+    const value = qty * unitCost;
+    const revenue = qty * unitPrice;
+    totalValue += value;
+    totalRevenue += revenue;
+    totalStock += qty;
+
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${escapeHtml(item.sku || "")}</td>
+      <td>${escapeHtml(item.name || "")}</td>
+      <td>${escapeHtml(item.category || "")}</td>
+      <td>${qty}</td>
+      <td>${unitCost.toFixed(2)}</td>
+      <td>${unitPrice.toFixed(2)}</td>
+      <td>${value.toFixed(2)}</td>
+      <td>
+        <button class="btn-edit" data-id="${item._id || item.id}">Edit</button>
+        <button class="btn-delete" data-id="${item._id || item.id}">Delete</button>
+      </td>`;
+    tbody.appendChild(tr);
+  });
+
+  const totalValueEl = document.getElementById("totalValue");
+  if (totalValueEl) totalValueEl.textContent = totalValue.toFixed(2);
+  const totalRevenueEl = document.getElementById("totalRevenue");
+  if (totalRevenueEl) totalRevenueEl.textContent = totalRevenue.toFixed(2);
+  const totalStockEl = document.getElementById("totalStock");
+  if (totalStockEl) totalStockEl.textContent = totalStock;
+
+  // Attach events
+  document.querySelectorAll(".btn-edit").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      const id = e.currentTarget.dataset.id;
+      openEditProductModal(id);
+    });
+  });
+  document.querySelectorAll(".btn-delete").forEach((b) => {
+    b.addEventListener("click", async (e) => {
+      const id = e.currentTarget.dataset.id;
+      if (!confirm("Delete this product?")) return;
+      try {
+        await apiDELETE(`${API_BASE}/inventory/${id}`);
+        await loadInventory();
+        alert("Deleted");
+      } catch (err) {
+        console.error("delete product", err);
+        alert("Failed to delete product");
+      }
+    });
+  });
 }
 
-async function fetchCompanyConfig() {
-  try {
-    const res = await apiFetch(`${API_BASE}/company-config`);
-    companyConfig = await res.json();
-    if(currentPage.includes('company.html')) renderCompanyConfig();
-    return companyConfig;
-  } catch(e) { console.error('Error fetching config:', e); }
+// Add product (from inventory page inputs)
+async function addProductFromForm() {
+  const sku = (document.getElementById("p_sku") || {}).value || "";
+  const name = (document.getElementById("p_name") || {}).value || "";
+  const category = (document.getElementById("p_category") || {}).value || "";
+  const quantity = Number((document.getElementById("p_quantity") || {}).value || 0);
+  const unitCost = Number((document.getElementById("p_unitCost") || {}).value || 0);
+  const unitPrice = Number((document.getElementById("p_unitPrice") || {}).value || 0);
+
+  if (!sku || !name) return alert("SKU and Name are required");
+  const payload = { sku, name, category, quantity, unitCost, unitPrice };
+  try {
+    await apiPOST(`${API_BASE}/inventory`, payload);
+    await loadInventory();
+    ["p_sku", "p_name", "p_category", "p_quantity", "p_unitCost", "p_unitPrice"].forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
+    alert("Product added");
+  } catch (err) {
+    console.error("addProductFromForm", err);
+    alert("Failed to add product");
+  }
 }
 
-// Initial data fetch based on page
-async function initDataFetch() {
-  if (currentPage.includes('login.html')) return;
-  
-  // Check and set username in the header
-  const adminNameEl = qs('#adminName');
-  if (adminNameEl) adminNameEl.textContent = getUsername();
-    
-  await fetchCompanyConfig();
-
-  if(currentPage.includes('index.html') || currentPage.includes('order.html') || currentPage.includes('sale.html') || currentPage.includes('inventory.html')) {
-    await fetchInventoryData(); 
-  }
-  if(currentPage.includes('index.html') || currentPage.includes('orders.html') || currentPage.includes('order.html')) await fetchOrders();
-  if(currentPage.includes('index.html') || currentPage.includes('sales.html') || currentPage.includes('sale.html')) await fetchSales();
-  if(currentPage.includes('documents.html')) await fetchDocuments();
-  if(currentPage.includes('log.html') || currentPage.includes('index.html')) await fetchLogs();
-  
-  if(currentPage.includes('product.html')) initProductPage();
-  if(currentPage.includes('setting.html')) initSettingPage();
+// Open edit modal (inventory)
+function openEditProductModal(id) {
+  const item = inventory.find(i => (i._id || i.id) == id);
+  if (!item) return alert("Item not found");
+  // If product page exists, redirect with id param
+  if (location.pathname.endsWith("product.html")) {
+    location.href = `product.html?id=${encodeURIComponent(id)}`;
+    return;
+  }
+  // else fill modal in inventory.html
+  const modal = document.getElementById("productModal");
+  if (!modal) {
+    // fallback to product page
+    location.href = `product.html?id=${encodeURIComponent(id)}`;
+    return;
+  }
+  document.getElementById("modalTitle").textContent = "Edit Product";
+  (document.getElementById("skuInput") || {}).value = item.sku || "";
+  (document.getElementById("nameInput") || {}).value = item.name || "";
+  (document.getElementById("categoryInput") || {}).value = item.category || "";
+  (document.getElementById("qtyInput") || {}).value = item.quantity || 0;
+  (document.getElementById("costInput") || {}).value = item.unitCost || 0;
+  (document.getElementById("priceInput") || {}).value = item.unitPrice || 0;
+  document.getElementById("saveProductBtn").dataset.editId = id;
+  modal.classList.remove("hidden");
 }
-document.addEventListener('DOMContentLoaded', initDataFetch);
 
-// ===== PDF Report Generation (For Order/Sale) =====
-async function generatePDFReport(id, type) {
-  const endpoint = `${API_BASE}/${type}s/report-pdf/${id}`;
-  
-  if(!confirm(`Confirm Generate PDF Report for ${type} ${id}?`)) return;
+async function saveProductModal() {
+  const editId = document.getElementById("saveProductBtn").dataset.editId;
+  const sku = (document.getElementById("skuInput") || {}).value || "";
+  const name = (document.getElementById("nameInput") || {}).value || "";
+  const category = (document.getElementById("categoryInput") || {}).value || "";
+  const quantity = Number((document.getElementById("qtyInput") || {}).value || 0);
+  const unitCost = Number((document.getElementById("costInput") || {}).value || 0);
+  const unitPrice = Number((document.getElementById("priceInput") || {}).value || 0);
 
-  try {
-    window.location.href = endpoint;
-    alert(`✅ PDF Report generation started for ${type.toUpperCase()}. Check your downloads folder.`);
-  } catch(e) {
-    console.error(e);
-    alert('❌ Server connection error while generating report.');
-  }
-}
-window.generatePDFReport = generatePDFReport;
+  if (!sku || !name) return alert("SKU and Name required");
+  const payload = { sku, name, category, quantity, unitCost, unitPrice };
 
-
-// ===== Inventory Functions (CRUD, Render, Search) =====
-
-async function saveProduct(id) {
-    const msgEl = qs('#addMessage') || qs('#productMessage');
-    const isEdit = !!id;
-
-    const payload = {
-        sku: qs(isEdit ? '#prod_sku' : '#p_sku').value,
-        name: qs(isEdit ? '#prod_name' : '#p_name').value,
-        category: qs(isEdit ? '#prod_category' : '#p_category').value,
-        quantity: parseInt(qs(isEdit ? '#prod_quantity' : '#p_quantity').value) || 0,
-        unitCost: parseFloat(qs(isEdit ? '#prod_unitCost' : '#p_unitCost').value) || 0.00,
-        unitPrice: parseFloat(qs(isEdit ? '#prod_unitPrice' : '#p_unitPrice').value) || 0.00
-    };
-
-    if (!payload.sku || !payload.name) {
-        showMsg(msgEl, 'SKU and Name are required.', 'red');
-        return;
-    }
-
-    const method = isEdit ? 'PUT' : 'POST';
-    const url = isEdit ? `${API_BASE}/inventory/${id}` : `${API_BASE}/inventory`;
-
-    showMsg(msgEl, 'Saving...', 'gray');
-
-    try {
-        const res = await apiFetch(url, {
-            method: method,
-            body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-
-        if (res.ok) {
-            showMsg(msgEl, `✅ Product ${isEdit ? 'updated' : 'added'} successfully!`, 'green');
-            if (!isEdit) {
-                // Clear inputs after adding new product
-                qs('#p_sku').value = '';
-                qs('#p_name').value = '';
-                qs('#p_category').value = '';
-                qs('#p_quantity').value = 0;
-                qs('#p_unitCost').value = 0.00;
-                qs('#p_unitPrice').value = 0.00;
-            } else {
-                // On edit page, redirect back after a short delay
-                setTimeout(() => window.location.href = 'inventory.html', 700);
-            }
-            fetchInventoryData(); // Refresh list/dashboard data
-        } else {
-            showMsg(msgEl, `❌ Failed to save product: ${data.message || 'Unknown error.'}`, 'red');
-        }
-    } catch (e) {
-        console.error(e);
-        showMsg(msgEl, '❌ Server connection error.', 'red');
-    }
-}
-window.saveProduct = saveProduct;
-
-function openEditPageForItem(id) {
-    window.location.href = `product.html?id=${id}`;
-}
-window.openEditPageForItem = openEditPageForItem;
-
-async function confirmAndDeleteItem(id) {
-    const item = inventory.find(i => i.id === id);
-    if (!item) return alert('Item not found.');
-    if (!confirm(`Are you sure you want to delete product: ${item.name} (${item.sku})?`)) return;
-
-    try {
-        const res = await apiFetch(`${API_BASE}/inventory/${id}`, { method: 'DELETE' });
-        if (res.status === 204) {
-            alert('🗑️ Product deleted successfully!');
-            fetchInventoryData(); // Refresh list
-        } else {
-            const err = await res.json();
-            alert('❌ Failed to delete product: ' + (err.message || 'Unknown'));
-        }
-    } catch (e) {
-        console.error(e);
-        alert('❌ Server connection error while deleting product.');
-    }
-}
-window.confirmAndDeleteItem = confirmAndDeleteItem;
-
-function initProductPage() {
-    const urlParams = new URLSearchParams(window.location.search);
-    const editId = urlParams.get('id');
-    const saveBtn = qs('#saveProductBtn');
-
+  try {
     if (editId) {
-        const item = inventory.find(i => i.id === editId);
-        if (item) {
-            qs('#prod_id').value = item.id;
-            qs('#prod_sku').value = item.sku || '';
-            qs('#prod_name').value = item.name || '';
-            qs('#prod_category').value = item.category || '';
-            qs('#prod_quantity').value = item.quantity || 0;
-            qs('#prod_unitCost').value = (item.unitCost || 0).toFixed(2);
-            qs('#prod_unitPrice').value = (item.unitPrice || 0).toFixed(2);
-
-            qs('#productForm h1').textContent = `✏️ Edit Product: ${item.name}`;
-            saveBtn.textContent = '💾 Save Changes';
-            saveBtn.onclick = () => saveProduct(editId);
-        } else {
-            alert('Product not found.');
-            window.location.href = 'inventory.html';
-        }
-    } else if (saveBtn) {
-        // This handles case where product.html is used for a new item (less common but safe)
-        saveBtn.onclick = () => saveProduct(null); 
-    }
-}
-
-function renderInventory(items) {
-  const list = qs('#inventoryList');
-  if(!list) return;
-  list.innerHTML = '';
-  let totalValue = 0, totalRevenue = 0, totalStock = 0;
-
-  items.forEach(it => {
-    const id = it.id || it._id;
-    const qty = Number(it.quantity || 0);
-    const uc = Number(it.unitCost || 0);
-    const up = Number(it.unitPrice || 0);
-    const invVal = qty * uc;
-    const rev = qty * up;
-    totalValue += invVal;
-    totalRevenue += rev;
-    totalStock += qty;
-
-    const tr = document.createElement('tr');
-    if(qty === 0) tr.classList.add('out-of-stock-row');
-    else if(qty < 10) tr.classList.add('low-stock-row');
-
-    tr.innerHTML = `
-      <td>${escapeHtml(it.sku||'')}</td>
-      <td>${escapeHtml(it.name||'')}</td>
-      <td>${escapeHtml(it.category||'')}</td>
-      <td>${qty}</td>
-      <td class="money">${moneyFormat(uc)}</td>
-      <td class="money">${moneyFormat(up)}</td>
-      <td class="money">${moneyFormat(invVal)}</td>
-      <td class="actions">
-        <button class="primary-btn small-btn" onclick="openEditPageForItem('${id}')">✏️ Edit</button>
-        <button class="danger-btn small-btn" onclick="confirmAndDeleteItem('${id}')">🗑️ Delete</button>
-      </td>
-    `;
-    list.appendChild(tr);
-  });
-
-  if(qs('#totalValue')) qs('#totalValue').textContent = totalValue.toFixed(2);
-  if(qs('#totalRevenue')) qs('#totalRevenue').textContent = (totalRevenue - totalValue).toFixed(2); // Show potential profit
-  if(qs('#totalStock')) qs('#totalStock').textContent = totalStock;
-}
-
-function filterInventory() {
-    const searchInput = qs('#searchInput').value.toLowerCase();
-    const filtered = inventory.filter(item => 
-        (item.sku && item.sku.toLowerCase().includes(searchInput)) ||
-        (item.name && item.name.toLowerCase().includes(searchInput)) ||
-        (item.category && item.category.toLowerCase().includes(searchInput))
-    );
-    renderInventory(filtered);
-}
-
-// DOM binding for inventory page
-document.addEventListener('DOMContentLoaded', () => {
-    // Inventory Add Product
-    qs('#addProductBtn')?.addEventListener('click', () => saveProduct(null));
-
-    // Inventory Search
-    qs('#searchInput')?.addEventListener('input', filterInventory);
-    qs('#clearSearchBtn')?.addEventListener('click', () => {
-        qs('#searchInput').value = '';
-        renderInventory(inventory);
-    });
-
-    if(currentPage.includes('product.html')) initProductPage();
-});
-
-// ===== Dashboard Renderers (Updated) =====
-function renderDashboardData(){ 
-  const totalItems = inventory.length;
-  const totalStock = inventory.reduce((sum, i) => sum + (i.quantity || 0), 0);
-  const totalValue = inventory.reduce((sum, i) => sum + (i.quantity || 0) * (i.unitCost || 0), 0);
-  
-  const totalOrders = orders.length;
-  const totalSales = sales.length;
-  const totalSalesRevenue = sales.reduce((sum, s) => sum + s.grandTotal, 0);
-
-  if(qs('#dash_totalItems')) qs('#dash_totalItems').textContent = totalItems;
-  if(qs('#dash_totalValue')) qs('#dash_totalValue').textContent = totalValue.toFixed(2);
-  if(qs('#dash_totalRevenue')) qs('#dash_totalRevenue').textContent = inventory.reduce((sum, i) => sum + (i.quantity || 0) * (i.unitPrice || 0), 0).toFixed(2);
-  if(qs('#dash_totalStock')) qs('#dash_totalStock').textContent = totalStock;
-
-  if(qs('#dash_totalOrders')) qs('#dash_totalOrders').textContent = totalOrders;
-  if(qs('#dash_totalSales')) qs('#dash_totalSales').textContent = totalSales;
-  if(qs('#dash_totalRevenueTotal')) qs('#dash_totalRevenueTotal').textContent = totalSalesRevenue.toFixed(2);
-
-  const recentLogList = qs('#recentActivities');
-  if(recentLogList) {
-      recentLogList.innerHTML = '';
-      [...activityLog].slice(0, 5).forEach(l => {
-        const timeStr = l.time ? new Date(l.time).toLocaleTimeString() : '';
-        const dateStr = l.time ? new Date(l.time).toLocaleDateString() : '';
-        recentLogList.innerHTML += `
-            <tr>
-                <td>${escapeHtml(l.user||'System')}</td>
-                <td>${escapeHtml(l.action||'')}</td>
-                <td>${escapeHtml(dateStr)} ${escapeHtml(timeStr)}</td>
-            </tr>
-        `;
-    });
-  }
-}
-window.renderDashboardData = renderDashboardData;
-
-
-// ===== Order/Sale Common Functions (NEW) =====
-
-function initOrderSalePage(isOrder) {
-    const entity = isOrder ? 'order' : 'sale';
-    const formId = isOrder ? 'orderForm' : 'saleForm';
-    
-    const urlParams = new URLSearchParams(window.location.search);
-    const editId = urlParams.get('id');
-
-    const itemSelect = qs(`#${formId} #itemSelect`);
-    if(itemSelect && inventory.length > 0) {
-        itemSelect.innerHTML = '<option value="">-- Select Inventory Item --</option>';
-        inventory.forEach(item => {
-            const price = isOrder ? item.unitCost : item.unitPrice;
-            itemSelect.innerHTML += `<option 
-                                        value="${item.id}" 
-                                        data-sku="${escapeHtml(item.sku)}" 
-                                        data-name="${escapeHtml(item.name)}" 
-                                        data-price="${price}">
-                                        ${escapeHtml(item.name)} (SKU: ${escapeHtml(item.sku)} | ${moneyFormat(price)})
-                                    </option>`;
-        });
-    }
-
-    qs(`#${formId} #addItemBtn`)?.addEventListener('click', () => addLineItem(isOrder));
-    qs(`#${formId} #save${isOrder ? 'Order' : 'Sale'}Btn`)?.addEventListener('click', () => saveOrderSale(editId, isOrder));
-    
-    if (editId) {
-        const data = (isOrder ? orders : sales).find(o => o.id === editId);
-        if (data) {
-            populateOrderSaleForm(data, isOrder);
-            qs(`#${formId} #save${isOrder ? 'Order' : 'Sale'}Btn`).textContent = `💾 Save Changes to ${isOrder ? 'Order' : 'Sale'}`;
-            qs(`#${formId} h1`).textContent = `✏️ Edit ${isOrder ? 'Purchase Order' : 'Sales Transaction'} ${data[isOrder ? 'orderNumber' : 'saleNumber']}`;
-            qs(`#${formId} h2`).textContent = `Edit Details - ${data[isOrder ? 'orderNumber' : 'saleNumber']}`;
-        } else {
-            alert(`${isOrder ? 'Order' : 'Sale'} not found.`);
-            window.location.href = `${isOrder ? 'orders' : 'sales'}.html`;
-        }
-    } else {
-        // Run initial calculation for a new empty form
-        calculateOrderSaleTotals(entity); 
-    }
-}
-window.initOrderSalePage = initOrderSalePage;
-
-function addLineItem(isOrder) {
-    const entity = isOrder ? 'order' : 'sale';
-    const itemSelect = qs(`#${entity}Form #itemSelect`);
-    const qtyInput = qs(`#${entity}Form #itemQuantity`);
-    const itemsList = qs(`#${entity}Form #lineItems`);
-    const selectedOption = itemSelect.options[itemSelect.selectedIndex];
-    
-    const inventoryId = selectedOption.value;
-    const quantity = parseInt(qtyInput.value);
-    
-    if (!inventoryId || quantity <= 0) {
-        alert('Please select an item and enter a valid quantity (> 0).');
-        return;
-    }
-    
-    const existingRow = itemsList.querySelector(`tr[data-inventory-id="${inventoryId}"]`);
-    if (existingRow) {
-        alert('Item already added. Remove the existing item or use the quantity field in the list to update.');
-        return;
-    }
-
-    const sku = selectedOption.getAttribute('data-sku');
-    const name = selectedOption.getAttribute('data-name');
-    const unitPrice = parseFloat(selectedOption.getAttribute('data-price'));
-    const total = quantity * unitPrice;
-
-    const newRow = document.createElement('tr');
-    newRow.setAttribute('data-inventory-id', inventoryId);
-    newRow.innerHTML = `
-        <td>${escapeHtml(name)}</td>
-        <td>${escapeHtml(sku)}</td>
-        <td><input type="number" min="1" value="${quantity}" class="item-qty-input" oninput="calculateLineTotal(this)" data-unit-price="${unitPrice}" /></td>
-        <td class="money">${moneyFormat(unitPrice)}</td>
-        <td class="money line-total">${moneyFormat(total)}</td>
-        <td class="actions">
-            <button class="danger-btn small-btn" onclick="this.closest('tr').remove(); calculateOrderSaleTotals('${entity}')">🗑️ Remove</button>
-        </td>
-    `;
-    itemsList.appendChild(newRow);
-
-    calculateOrderSaleTotals(entity);
-    itemSelect.selectedIndex = 0;
-    qtyInput.value = 1;
-}
-window.addLineItem = addLineItem;
-
-function calculateLineTotal(inputEl) {
-    const quantity = parseInt(inputEl.value) || 0;
-    const unitPrice = parseFloat(inputEl.getAttribute('data-unit-price')) || 0;
-    const total = quantity * unitPrice;
-    const totalEl = inputEl.closest('tr').querySelector('.line-total');
-    if (totalEl) totalEl.textContent = moneyFormat(total);
-    calculateOrderSaleTotals(inputEl.closest('form').id.includes('order') ? 'order' : 'sale');
-}
-window.calculateLineTotal = calculateLineTotal;
-
-function calculateOrderSaleTotals(entity) {
-    const rows = qsa(`#${entity}Form #lineItems tr`);
-    let subtotal = 0;
-
-    rows.forEach(row => {
-        const qty = parseInt(row.querySelector('.item-qty-input').value) || 0;
-        const price = parseFloat(row.querySelector('.item-qty-input').getAttribute('data-unit-price')) || 0;
-        subtotal += qty * price;
-    });
-
-    const taxRate = companyConfig.taxRate || 0.00;
-    const taxAmount = subtotal * taxRate;
-    const grandTotal = subtotal + taxAmount;
-
-    qs(`#${entity}Form #subtotal`).textContent = moneyFormat(subtotal);
-    qs(`#${entity}Form #taxRateDisplay`).textContent = (taxRate * 100).toFixed(2);
-    qs(`#${entity}Form #taxAmount`).textContent = moneyFormat(taxAmount);
-    qs(`#${entity}Form #grandTotal`).textContent = moneyFormat(grandTotal);
-}
-window.calculateOrderSaleTotals = calculateOrderSaleTotals;
-
-function gatherLineItems(entity) {
-    const rows = qsa(`#${entity}Form #lineItems tr`);
-    
-    return rows.map(row => {
-        const inventoryId = row.getAttribute('data-inventory-id');
-        const name = row.cells[0].textContent;
-        const sku = row.cells[1].textContent;
-        const inputEl = row.querySelector('.item-qty-input');
-        const quantity = parseInt(inputEl.value);
-        const unitPrice = parseFloat(inputEl.getAttribute('data-unit-price'));
-        const total = quantity * unitPrice;
-
-        return { inventoryId, name, sku, quantity, unitPrice, total };
-    });
-}
-
-function populateOrderSaleForm(data, isOrder) {
-    const entity = isOrder ? 'order' : 'sale';
-    const formId = isOrder ? 'orderForm' : 'saleForm';
-    const itemsList = qs(`#${formId} #lineItems`);
-    
-    qs(`#${formId} #customerName`).value = data.customerName || '';
-    qs(`#${formId} #contact`).value = data.contact || '';
-    qs(`#${formId} #status`).value = data.status || 'Pending';
-    
-    itemsList.innerHTML = ''; 
-
-    data.items.forEach(item => {
-        const unitPrice = item.unitPrice; // Use the fixed price saved on the transaction
-        
-        const newRow = document.createElement('tr');
-        newRow.setAttribute('data-inventory-id', item.inventoryId);
-        newRow.innerHTML = `
-            <td>${escapeHtml(item.name)}</td>
-            <td>${escapeHtml(item.sku)}</td>
-            <td><input type="number" min="1" value="${item.quantity}" class="item-qty-input" oninput="calculateLineTotal(this)" data-unit-price="${unitPrice}" /></td>
-            <td class="money">${moneyFormat(unitPrice)}</td>
-            <td class="money line-total">${moneyFormat(item.total)}</td>
-            <td class="actions">
-                <button class="danger-btn small-btn" onclick="this.closest('tr').remove(); calculateOrderSaleTotals('${entity}')">🗑️ Remove</button>
-            </td>
-        `;
-        itemsList.appendChild(newRow);
-    });
-    
-    calculateOrderSaleTotals(entity);
-}
-
-async function saveOrderSale(id, isOrder) {
-    const entity = isOrder ? 'order' : 'sale';
-    const msgEl = qs(`#${entity}Form #message`);
-    const items = gatherLineItems(entity);
-    
-    if (items.length === 0) {
-        showMsg(msgEl, 'Please add at least one item.', 'red');
-        return;
-    }
-    
-    const payload = {
-        customerName: qs(`#${entity}Form #customerName`).value,
-        contact: qs(`#${entity}Form #contact`).value,
-        status: qs(`#${entity}Form #status`).value,
-        items: items
-    };
-
-    const method = id ? 'PUT' : 'POST';
-    const url = id ? `${API_BASE}/${entity}s/${id}` : `${API_BASE}/${entity}s`;
-
-    showMsg(msgEl, 'Saving...', 'gray');
-    
-    try {
-        const res = await apiFetch(url, { method, body: JSON.stringify(payload) });
-        const data = await res.json();
-        
-        if(res.ok) {
-            showMsg(msgEl, `✅ ${entity} saved successfully! Redirecting...`, 'green');
-            setTimeout(() => {
-                fetchInventoryData(); 
-                window.location.href = `${entity}s.html`;
-            }, 700);
-        } else {
-            showMsg(msgEl, `❌ Failed to save ${entity}: ${data.message || 'Unknown error.'}`, 'red');
-        }
-    } catch(e) {
-        console.error(e);
-        showMsg(msgEl, '❌ Server connection error.', 'red');
-    }
-}
-window.saveOrderSale = saveOrderSale;
-
-// ===== Orders List Functions (NEW) =====
-
-function renderOrders(currentOrders) {
-    const list = qs('#orderList');
-    if(!list) return;
-    list.innerHTML = '';
-
-    currentOrders.forEach(o => {
-        const id = o.id || o._id;
-        const totalItems = o.items.reduce((sum, item) => sum + item.quantity, 0);
-        const statusClass = o.status.toLowerCase().replace(/\s/g, '-');
-
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-            <td>${escapeHtml(o.orderNumber)}</td>
-            <td>${escapeHtml(o.customerName)}</td>
-            <td>${totalItems}</td>
-            <td class="money">${moneyFormat(o.grandTotal)}</td>
-            <td class="status-cell ${statusClass}">${escapeHtml(o.status)}</td>
-            <td class="actions">
-                <button class="primary-btn small-btn" onclick="openEditPageForOrder('${id}')">✏️ Edit</button>
-                <button class="danger-btn small-btn" onclick="confirmAndDeleteOrder('${id}')">🗑️ Delete</button>
-                <button class="secondary-btn small-btn" onclick="generatePDFReport('${id}', 'order')">📄 PDF Report</button>
-            </td>
-        `;
-        list.appendChild(tr);
-    });
-}
-window.renderOrders = renderOrders;
-
-function openEditPageForOrder(id) { window.location.href = `order.html?id=${id}`; }
-window.openEditPageForOrder = openEditPageForOrder;
-
-async function confirmAndDeleteOrder(id) {
-    const order = orders.find(o => o.id === id);
-    if (!order) return alert('Order not found.');
-    if(!confirm(`Are you sure you want to delete Order ${order.orderNumber}? If the order was Approved, stock changes will be reversed.`)) return;
-    
-    try {
-        const res = await apiFetch(`${API_BASE}/orders/${id}`, { method: 'DELETE' });
-        if(res.status === 204) {
-            await fetchOrders();
-            await fetchInventoryData(); 
-            alert('🗑️ Order deleted! Inventory updated.');
-        } else {
-            const err = await res.json();
-            alert('❌ Failed to delete order: ' + (err.message || 'Unknown'));
-        }
-    } catch(e) { 
-        console.error(e); 
-        alert('❌ Server connection error while deleting order.'); 
-    }
-}
-window.confirmAndDeleteOrder = confirmAndDeleteOrder;
-
-// ===== Sales List Functions (NEW) =====
-
-function renderSales(currentSales) {
-    const list = qs('#saleList');
-    if(!list) return;
-    list.innerHTML = '';
-
-    currentSales.forEach(s => {
-        const id = s.id || s._id;
-        const totalItems = s.items.reduce((sum, item) => sum + item.quantity, 0);
-        const statusClass = s.status.toLowerCase().replace(/\s/g, '-');
-
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-            <td>${escapeHtml(s.saleNumber)}</td>
-            <td>${escapeHtml(s.customerName)}</td>
-            <td>${totalItems}</td>
-            <td class="money">${moneyFormat(s.grandTotal)}</td>
-            <td class="status-cell ${statusClass}">${escapeHtml(s.status)}</td>
-            <td class="actions">
-                <button class="primary-btn small-btn" onclick="openEditPageForSale('${id}')">✏️ Edit</button>
-                <button class="danger-btn small-btn" onclick="confirmAndDeleteSale('${id}')">🗑️ Delete</button>
-                <button class="secondary-btn small-btn" onclick="generatePDFReport('${id}', 'sale')">📄 PDF Report</button>
-            </td>
-        `;
-        list.appendChild(tr);
-    });
-}
-window.renderSales = renderSales;
-
-function openEditPageForSale(id) { window.location.href = `sale.html?id=${id}`; }
-window.openEditPageForSale = openEditPageForSale;
-
-async function confirmAndDeleteSale(id) {
-    const sale = sales.find(s => s.id === id);
-    if (!sale) return alert('Sale not found.');
-    if(!confirm(`Are you sure you want to delete Sale ${sale.saleNumber}? If the sale was Approved, stock changes will be reversed.`)) return;
-    
-    try {
-        const res = await apiFetch(`${API_BASE}/sales/${id}`, { method: 'DELETE' });
-        if(res.status === 204) {
-            await fetchSales();
-            await fetchInventoryData(); 
-            alert('🗑️ Sale deleted! Inventory updated.');
-        } else {
-            const err = await res.json();
-            alert('❌ Failed to delete sale: ' + (err.message || 'Unknown'));
-        }
-    } catch(e) { 
-        console.error(e); 
-        alert('❌ Server connection error while deleting sale.'); 
-    }
-}
-window.confirmAndDeleteSale = confirmAndDeleteSale;
-
-// ===== Company Config Functions (NEW) =====
-
-function renderCompanyConfig() {
-  if (currentPage.includes('company.html')) {
-    qs('#companyName').value = companyConfig.companyName || '';
-    qs('#companyAddress').value = companyConfig.address || '';
-    qs('#companyPhone').value = companyConfig.phone || '';
-    qs('#companyEmail').value = companyConfig.email || '';
-    qs('#taxRate').value = (companyConfig.taxRate * 100).toFixed(2);
-  }
-}
-
-async function saveCompanyConfig() {
-  const msgEl = qs('#configMessage');
-  const taxRatePercent = qs('#taxRate').value;
-  const newConfig = {
-    companyName: qs('#companyName').value,
-    address: qs('#companyAddress').value,
-    phone: qs('#companyPhone').value,
-    email: qs('#companyEmail').value,
-    taxRate: (parseFloat(taxRatePercent) / 100) || 0.00
-  };
-
-  if (isNaN(parseFloat(taxRatePercent)) || parseFloat(taxRatePercent) < 0) {
-    showMsg(msgEl, 'Invalid tax rate (must be a positive number).', 'red');
-    return;
-  }
-  
-  try {
-    const res = await apiFetch(`${API_BASE}/company-config`, {
-      method: 'PUT',
-      body: JSON.stringify(newConfig)
-    });
-    
-    const data = await res.json();
-    if(res.ok) {
-      showMsg(msgEl, '✅ Company configuration saved!', 'green');
-      fetchCompanyConfig(); 
-    } else {
-      showMsg(msgEl, `❌ Failed to save config: ${data.message || 'Unknown error.'}`, 'red');
-    }
-  } catch(e) {
-    console.error(e);
-    showMsg(msgEl, '❌ Server connection error.', 'red');
-  }
-}
-window.saveCompanyConfig = saveCompanyConfig;
-
-
-// --- Document Functions (Render, CRUD) ---
-
-function renderDocuments(docs) {
-    const list = qs('#docList');
-    if(!list) return;
-    list.innerHTML = '';
-
-    docs.forEach(d => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-            <td>${escapeHtml(d.fileName)}</td>
-            <td>${(d.sizeMB || 0).toFixed(2)}</td>
-            <td>${new Date(d.uploadTime).toLocaleString()}</td>
-            <td class="actions">
-                <button class="primary-btn small-btn" onclick="downloadDocument('${d.id}')">⬇️ Download</button>
-                <button class="danger-btn small-btn" onclick="deleteDocumentConfirm('${d.id}', '${escapeHtml(d.fileName)}')">🗑️ Delete</button>
-            </td>
-        `;
-        list.appendChild(tr);
-    });
-}
-window.renderDocuments = renderDocuments;
-
-async function uploadDocuments() {
-    const fileInput = qs('#docUpload');
-    const msgEl = qs('#uploadMessage');
-    const files = fileInput.files;
-
-    if (files.length === 0) {
-        showMsg(msgEl, 'Please select at least one file to upload.', 'red');
-        return;
-    }
-
-    const formData = new FormData();
-    for (let i = 0; i < files.length; i++) {
-        formData.append('documents', files[i]);
-    }
-
-    showMsg(msgEl, 'Uploading...', 'gray');
-
-    try {
-        const res = await apiFetch(`${API_BASE}/documents/upload`, {
-            method: 'POST',
-            body: formData,
-            headers: { 'Content-Type': 'multipart/form-data', 'X-Username': getUsername() } // Fetch wrapper handles X-Username, but we manually remove Content-Type here if not handled by fetch wrapper
-        });
-        
-        // Manual adjust: for FormData, we often let the browser set the Content-Type, 
-        // so we use a standard fetch, but the existing apiFetch may enforce 'application/json'. 
-        // Temporarily override headers for file upload:
-        const fetchRes = await fetch(`${API_BASE}/documents/upload`, {
-             method: 'POST',
-             body: formData,
-             headers: { 'X-Username': getUsername() }
-        });
-        const data = await fetchRes.json();
-        
-        if (fetchRes.ok) {
-            showMsg(msgEl, `✅ Successfully uploaded ${data.uploadedCount} documents!`, 'green');
-            fileInput.value = ''; // Clear file input
-            fetchDocuments();
-            fetchLogs();
-        } else {
-            showMsg(msgEl, `❌ Upload failed: ${data.message || 'Unknown error.'}`, 'red');
-        }
-    } catch(e) {
-        console.error(e);
-        showMsg(msgEl, '❌ Server connection error during upload.', 'red');
-    }
-}
-window.uploadDocuments = uploadDocuments;
-
-function downloadDocument(id) {
-    // Client-side redirect to the file download endpoint
-    window.location.href = `${API_BASE}/documents/${id}/download`;
-    alert('⬇️ Download started. Check your downloads folder.');
-}
-window.downloadDocument = downloadDocument;
-
-async function deleteDocumentConfirm(id, fileName) {
-    if (!confirm(`Are you sure you want to delete document: ${fileName}?`)) return;
-
-    try {
-        const res = await apiFetch(`${API_BASE}/documents/${id}`, { method: 'DELETE' });
-        if(res.status === 204) {
-            alert('🗑️ Document deleted successfully!');
-            fetchDocuments();
-            fetchLogs();
-        } else {
-            const err = await res.json();
-            alert('❌ Failed to delete document: ' + (err.message || 'Unknown'));
-        }
-    } catch(e) {
-        console.error(e);
-        alert('❌ Server connection error while deleting document.');
-    }
-}
-window.deleteDocumentConfirm = deleteDocumentConfirm;
-
-// --- Log Functions ---
-
-function renderLogs(logs) {
-    const list = qs('#logList');
-    if(!list) return;
-    list.innerHTML = '';
-    
-    logs.forEach(l => {
-        const timeStr = l.time ? new Date(l.time).toLocaleTimeString() : '';
-        const dateStr = l.time ? new Date(l.time).toLocaleDateString() : '';
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-            <td>${escapeHtml(l.user||'System')}</td>
-            <td>${escapeHtml(l.action||'')}</td>
-            <td>${escapeHtml(dateStr)} ${escapeHtml(timeStr)}</td>
-        `;
-        list.appendChild(tr);
-    });
-}
-window.renderLogs = renderLogs;
-
-
-// --- Auth Functions (Login/Register/Delete Account/Change Password) ---
-
-// Assuming login, register, toggleForm, initSettingPage, changePassword, deleteAccountConfirm 
-// are defined and working correctly as per previous steps. (They are included in the full script block.)
-
-function login() {
-    // Simplified logic, should use API in a real app
-    const username = qs('#username').value;
-    const password = qs('#password').value;
-    const msgEl = qs('#loginMessage');
-
-    if (!username || !password) {
-        showMsg(msgEl, 'Please enter username and password.', 'red');
-        return;
-    }
-
-    apiFetch(`${API_BASE}/auth/login`, {
-        method: 'POST',
-        body: JSON.stringify({ username, password })
-    }).then(res => res.json())
-      .then(data => {
-        if(data.success) {
-            sessionStorage.setItem('isLoggedIn', 'true');
-            sessionStorage.setItem('adminName', username);
-            showMsg(msgEl, '✅ Login successful! Redirecting...', 'green');
-            setTimeout(() => window.location.href = 'index.html', 500);
-        } else {
-            showMsg(msgEl, `❌ Login failed: ${data.message || 'Invalid credentials.'}`, 'red');
-        }
-      }).catch(e => {
-        console.error(e);
-        showMsg(msgEl, '❌ Server connection error.', 'red');
-      });
-}
-window.login = login;
-
-function register() {
-    const username = qs('#newUsername').value;
-    const password = qs('#newPassword').value;
-    const code = qs('#securityCode').value;
-    const msgEl = qs('#registerMessage');
-
-    if (!username || !password || !code) {
-        showMsg(msgEl, 'All fields are required.', 'red');
-        return;
-    }
-
-    apiFetch(`${API_BASE}/auth/register`, {
-        method: 'POST',
-        body: JSON.stringify({ username, password, securityCode: code })
-    }).then(res => res.json())
-      .then(data => {
-        if(data.success) {
-            showMsg(msgEl, '✅ Registration successful! You can now log in.', 'green');
-            toggleForm();
-        } else {
-            showMsg(msgEl, `❌ Registration failed: ${data.message || 'Invalid security code or username taken.'}`, 'red');
-        }
-      }).catch(e => {
-        console.error(e);
-        showMsg(msgEl, '❌ Server connection error.', 'red');
-      });
-}
-window.register = register;
-
-function toggleForm() {
-    const loginForm = qs('#loginForm');
-    const registerForm = qs('#registerForm');
-    const formTitle = qs('#formTitle');
-
-    if (loginForm.style.display === 'none') {
-        loginForm.style.display = 'block';
-        registerForm.style.display = 'none';
-        formTitle.textContent = '🔐 User Login';
-        qs('#loginMessage').textContent = '';
+      await apiPUT(`${API_BASE}/inventory/${editId}`, payload);
+      delete document.getElementById("saveProductBtn").dataset.editId;
     } else {
-        loginForm.style.display = 'none';
-        registerForm.style.display = 'block';
-        formTitle.textContent = '📝 Register New Account';
-        qs('#registerMessage').textContent = '';
+      await apiPOST(`${API_BASE}/inventory`, payload);
     }
-}
-window.toggleForm = toggleForm;
-
-function initSettingPage() {
-  const currentUsername = getUsername();
-  if (qs('#currentUser')) qs('#currentUser').textContent = currentUsername;
-
-  qs('#changePasswordBtn')?.addEventListener('click', changePassword);
-  qs('#deleteAccountBtn')?.addEventListener('click', deleteAccountConfirm);
+    document.getElementById("productModal").classList.add("hidden");
+    await loadInventory();
+  } catch (err) {
+    console.error("saveProductModal", err);
+    alert("Failed to save product");
+  }
 }
 
-async function changePassword() {
-    const newPassword = qs('#newPassword').value;
-    const confirmPassword = qs('#confirmPassword').value;
-    const securityCode = qs('#securityCode').value;
-    const msgEl = qs('#passwordMessage');
-    const username = getUsername();
-
-    if (newPassword !== confirmPassword) {
-        showMsg(msgEl, 'New passwords do not match.', 'red');
-        return;
-    }
-    if (!newPassword || !securityCode) {
-        showMsg(msgEl, 'Password and security code are required.', 'red');
-        return;
-    }
-
-    showMsg(msgEl, 'Changing password...', 'gray');
-
-    try {
-        const res = await apiFetch(`${API_BASE}/account/password`, {
-            method: 'PUT',
-            body: JSON.stringify({ username, newPassword, securityCode })
-        });
-        const data = await res.json();
-        if (res.ok) {
-            showMsg(msgEl, '✅ Password changed successfully!', 'green');
-            qs('#newPassword').value = '';
-            qs('#confirmPassword').value = '';
-            qs('#securityCode').value = '';
-        } else {
-            showMsg(msgEl, `❌ Failed to change password: ${data.message || 'Invalid security code.'}`, 'red');
-        }
-    } catch (e) {
-        console.error(e);
-        showMsg(msgEl, '❌ Server connection error.', 'red');
-    }
+// Utility: escape HTML
+function escapeHtml(str) {
+  if (!str) return "";
+  return str.replace(/[&<>"']/g, function(m){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]); });
 }
-window.changePassword = changePassword;
+// ======================================================
+// ORDERS MODULE
+// ======================================================
+let orders = [];
+let currentOrderEditId = null;
+let orderItems = [];
 
-async function deleteAccountConfirm() {
-  const currentUsername = getUsername();
-  if (!confirm(`Are you sure you want to delete the account for "${currentUsername}"?`)) return;
-  const code = prompt('Enter Admin Security Code to CONFIRM account deletion:');
-  if(!code) return alert('Deletion cancelled.');
+async function initOrdersPage() {
+  await loadInventory(); // load products for dropdown
+  await loadOrders();
+
+  const btnAdd = document.getElementById("btnAddOrder");
+  if (btnAdd) btnAdd.addEventListener("click", () => openOrderModal(null));
+
+  const btnCancel = document.getElementById("cancelOrderBtn");
+  if (btnCancel) btnCancel.addEventListener("click", closeOrderModal);
+
+  const btnSave = document.getElementById("saveOrderBtn");
+  if (btnSave) btnSave.addEventListener("click", saveOrder);
+
+  const btnAddLine = document.getElementById("addOrderLine");
+  if (btnAddLine) btnAddLine.addEventListener("click", addOrderLine);
+
+  populateOrderProductDropdown();
+}
+
+async function loadOrders() {
   try {
-    const res = await apiFetch(`${API_BASE}/account`, { 
-      method: 'DELETE', 
-      body: JSON.stringify({ username: currentUsername, securityCode: code }) 
-    });
-    const data = await res.json();
-    if(res.ok) { 
-      alert('🗑️ Account deleted successfully. You will now be logged out.'); 
-      logout(); 
-    }
-    else alert(`❌ ${data.message || 'Failed to delete account.'}`);
-  } catch(e) { 
-    alert('❌ Server connection failed during account deletion.'); 
+    orders = await apiGET(`${API_BASE}/orders`);
+    renderOrders();
+  } catch (err) {
+    console.error("loadOrders error", err);
   }
 }
-window.deleteAccountConfirm = deleteAccountConfirm;
 
+function renderOrders() {
+  const tbody = document.querySelector("#ordersTable tbody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
 
-// DOM bindings for new pages
-document.addEventListener('DOMContentLoaded', ()=> {
-  if(currentPage.includes('company.html')) {
-    qs('#saveConfigBtn')?.addEventListener('click', saveCompanyConfig);
-    qs('#cancelConfigBtn')?.addEventListener('click', ()=> window.location.href = 'setting.html');
-  }
+  orders.forEach((o) => {
+    const tr = document.createElement("tr");
+    const total = o.total || 0;
 
-  if(currentPage.includes('login.html')) {
-    qs('#loginBtn')?.addEventListener('click', login);
-    qs('#registerBtn')?.addEventListener('click', register);
-    qs('#toggleToRegister')?.addEventListener('click', toggleForm);
-    qs('#toggleToLogin')?.addEventListener('click', toggleForm);
+    tr.innerHTML = `
+      <td>${o.orderNumber || o._id}</td>
+      <td>${new Date(o.date).toLocaleString()}</td>
+      <td>${escapeHtml(o.customer || "")}</td>
+      <td>${o.items.length}</td>
+      <td>RM ${total.toFixed(2)}</td>
+      <td>
+        <button class="btn-edit" data-id="${o._id}">Edit</button>
+        <button class="btn-delete" data-id="${o._id}">Delete</button>
+        <button class="btn-pdf" data-id="${o._id}">PDF</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  document.querySelectorAll(".btn-edit").forEach((b) => {
+    b.addEventListener("click", (e) => openOrderModal(e.currentTarget.dataset.id));
+  });
+
+  document.querySelectorAll(".btn-delete").forEach((b) => {
+    b.addEventListener("click", async (e) => {
+      if (!confirm("Delete this order?")) return;
+      await apiDELETE(`${API_BASE}/orders/${e.currentTarget.dataset.id}`);
+      await loadOrders();
+    });
+  });
+
+  document.querySelectorAll(".btn-pdf").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      window.open(`${API_BASE}/report/order/${e.currentTarget.dataset.id}/pdf`);
+    });
+  });
+}
+
+function openOrderModal(id) {
+  const modal = document.getElementById("orderModal");
+  if (!modal) return;
+
+  currentOrderEditId = id;
+  orderItems = [];
+
+  document.getElementById("orderCustomer").value = "";
+  document.getElementById("orderContact").value = "";
+  document.querySelector("#orderLines tbody").innerHTML = "";
+
+  if (id) {
+    const o = orders.find((x) => x._id === id);
+    if (o) {
+      document.getElementById("orderCustomer").value = o.customer;
+      document.getElementById("orderContact").value = o.contact;
+      orderItems = JSON.parse(JSON.stringify(o.items));
+      renderOrderLines();
+    }
   }
-  
-  if(currentPage.includes('documents.html')) {
-    qs('#uploadDocsBtn')?.addEventListener('click', uploadDocuments);
-    qs('#searchDocs')?.addEventListener('input', () => {
-        const query = qs('#searchDocs').value.toLowerCase();
-        const filtered = documents.filter(d => d.fileName.toLowerCase().includes(query));
-        renderDocuments(filtered);
+
+  calcOrderTotals();
+  modal.classList.remove("hidden");
+}
+
+function closeOrderModal() {
+  document.getElementById("orderModal").classList.add("hidden");
+}
+
+function populateOrderProductDropdown() {
+  const select = document.getElementById("orderProductSelect");
+  if (!select) return;
+
+  select.innerHTML = inventory.map((i) =>
+    `<option value="${i._id}" data-price="${i.unitPrice}">${i.sku} - ${i.name}</option>`
+  ).join("");
+}
+
+function addOrderLine() {
+  const select = document.getElementById("orderProductSelect");
+  const qtyEl = document.getElementById("orderItemQty");
+  const priceEl = document.getElementById("orderItemPrice");
+
+  const productId = select.value;
+  const qty = Number(qtyEl.value);
+  const price = Number(priceEl.value);
+
+  if (!productId || qty <= 0 || price <= 0) return alert("Invalid item");
+
+  const product = inventory.find((p) => p._id === productId);
+  if (!product) return alert("Invalid product");
+
+  orderItems.push({
+    productId,
+    sku: product.sku,
+    name: product.name,
+    qty,
+    price,
+    total: qty * price,
+  });
+
+  renderOrderLines();
+  calcOrderTotals();
+}
+
+function renderOrderLines() {
+  const tbody = document.querySelector("#orderLines tbody");
+  tbody.innerHTML = "";
+
+  orderItems.forEach((line, idx) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${line.name}</td>
+      <td>${line.qty}</td>
+      <td>RM ${line.price.toFixed(2)}</td>
+      <td>RM ${(line.qty * line.price).toFixed(2)}</td>
+      <td><button data-idx="${idx}" class="btn-delete-line">X</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  document.querySelectorAll(".btn-delete-line").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      const idx = e.currentTarget.dataset.idx;
+      orderItems.splice(idx, 1);
+      renderOrderLines();
+      calcOrderTotals();
+    });
+  });
+}
+
+function calcOrderTotals() {
+  let subtotal = 0;
+  orderItems.forEach((l) => (subtotal += l.qty * l.price));
+
+  const tax = subtotal * 0.00; // tax optional
+  const total = subtotal + tax;
+
+  document.getElementById("orderSubtotal").textContent = subtotal.toFixed(2);
+  document.getElementById("orderTax").textContent = tax.toFixed(2);
+  document.getElementById("orderTotal").textContent = total.toFixed(2);
+}
+
+async function saveOrder() {
+  if (orderItems.length === 0) return alert("Order has no items");
+
+  const customer = document.getElementById("orderCustomer").value;
+  const contact = document.getElementById("orderContact").value;
+
+  const payload = {
+    customer,
+    contact,
+    items: orderItems,
+    subtotal: orderItems.reduce((a, c) => a + c.qty * c.price, 0),
+    tax: 0,
+    total: orderItems.reduce((a, c) => a + c.qty * c.price, 0),
+  };
+
+  if (currentOrderEditId) {
+    await apiPUT(`${API_BASE}/orders/${currentOrderEditId}`, payload);
+  } else {
+    await apiPOST(`${API_BASE}/orders`, payload);
+  }
+
+  closeOrderModal();
+  await loadOrders();
+  alert("Order saved");
+}
+
+
+
+// ======================================================
+// SALES MODULE
+// ======================================================
+let sales = [];
+let currentSaleEditId = null;
+let saleItems = [];
+
+async function initSalesPage() {
+  await loadInventory();
+  await loadSales();
+
+  const btnAdd = document.getElementById("btnAddSale");
+  if (btnAdd) btnAdd.addEventListener("click", () => openSaleModal(null));
+
+  document.getElementById("cancelSaleBtn").addEventListener("click", closeSaleModal);
+  document.getElementById("saveSaleBtn").addEventListener("click", saveSale);
+  document.getElementById("addSaleLine").addEventListener("click", addSaleLine);
+
+  populateSaleProductDropdown();
+}
+
+async function loadSales() {
+  try {
+    sales = await apiGET(`${API_BASE}/sales`);
+    renderSales();
+  } catch (err) {
+    console.error("loadSales", err);
+  }
+}
+
+function renderSales() {
+  const tbody = document.querySelector("#salesTable tbody");
+  tbody.innerHTML = "";
+
+  sales.forEach((s) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${s.saleNumber || s._id}</td>
+      <td>${new Date(s.date).toLocaleString()}</td>
+      <td>${escapeHtml(s.customer)}</td>
+      <td>${s.items.length}</td>
+      <td>RM ${(s.total || 0).toFixed(2)}</td>
+      <td>
+        <button class="btn-edit" data-id="${s._id}">Edit</button>
+        <button class="btn-delete" data-id="${s._id}">Delete</button>
+        <button class="btn-pdf" data-id="${s._id}">PDF</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  document.querySelectorAll(".btn-edit").forEach((b) => {
+    b.addEventListener("click", (e) => openSaleModal(e.currentTarget.dataset.id));
+  });
+
+  document.querySelectorAll(".btn-delete").forEach((b) => {
+    b.addEventListener("click", async (e) => {
+      if (!confirm("Delete sale?")) return;
+      await apiDELETE(`${API_BASE}/sales/${e.currentTarget.dataset.id}`);
+      await loadSales();
+    });
+  });
+
+  document.querySelectorAll(".btn-pdf").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      window.open(`${API_BASE}/report/sale/${e.currentTarget.dataset.id}/pdf`);
+    });
+  });
+}
+
+function openSaleModal(id) {
+  const modal = document.getElementById("saleModal");
+  currentSaleEditId = id;
+  saleItems = [];
+
+  document.getElementById("saleCustomer").value = "";
+  document.getElementById("saleContact").value = "";
+  document.querySelector("#saleLines tbody").innerHTML = "";
+
+  if (id) {
+    const s = sales.find((x) => x._id === id);
+    if (s) {
+      document.getElementById("saleCustomer").value = s.customer;
+      document.getElementById("saleContact").value = s.contact;
+      saleItems = JSON.parse(JSON.stringify(s.items));
+      renderSaleLines();
+    }
+  }
+
+  calcSaleTotals();
+  modal.classList.remove("hidden");
+}
+
+function closeSaleModal() {
+  document.getElementById("saleModal").classList.add("hidden");
+}
+
+function populateSaleProductDropdown() {
+  const select = document.getElementById("saleProductSelect");
+  select.innerHTML = inventory
+    .map((i) => `<option value="${i._id}" data-price="${i.unitPrice}">${i.sku} - ${i.name}</option>`)
+    .join("");
+}
+
+function addSaleLine() {
+  const select = document.getElementById("saleProductSelect");
+  const qtyEl = document.getElementById("saleItemQty");
+  const priceEl = document.getElementById("saleItemPrice");
+
+  const productId = select.value;
+  const qty = Number(qtyEl.value);
+  const price = Number(priceEl.value);
+
+  if (!productId || qty <= 0 || price <= 0) return alert("Invalid item");
+
+  const product = inventory.find((p) => p._id === productId);
+  if (!product) return alert("Invalid product");
+
+  saleItems.push({
+    productId,
+    sku: product.sku,
+    name: product.name,
+    qty,
+    price,
+    total: qty * price,
+  });
+
+  renderSaleLines();
+  calcSaleTotals();
+}
+
+function renderSaleLines() {
+  const tbody = document.querySelector("#saleLines tbody");
+  tbody.innerHTML = "";
+
+  saleItems.forEach((line, idx) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${line.name}</td>
+      <td>${line.qty}</td>
+      <td>RM ${line.price.toFixed(2)}</td>
+      <td>RM ${(line.qty * line.price).toFixed(2)}</td>
+      <td><button data-idx="${idx}" class="btn-delete-line">X</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  document.querySelectorAll(".btn-delete-line").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      saleItems.splice(e.currentTarget.dataset.idx, 1);
+      renderSaleLines();
+      calcSaleTotals();
+    });
+  });
+}
+
+function calcSaleTotals() {
+  let subtotal = 0;
+  saleItems.forEach((l) => (subtotal += l.qty * l.price));
+
+  const tax = subtotal * 0;
+  const total = subtotal + tax;
+
+  document.getElementById("saleSubtotal").textContent = subtotal.toFixed(2);
+  document.getElementById("saleTax").textContent = tax.toFixed(2);
+  document.getElementById("saleTotal").textContent = total.toFixed(2);
+}
+
+async function saveSale() {
+  if (saleItems.length === 0) return alert("Sale has no items");
+
+  const customer = document.getElementById("saleCustomer").value;
+  const contact = document.getElementById("saleContact").value;
+
+  const payload = {
+    customer,
+    contact,
+    items: saleItems,
+    subtotal: saleItems.reduce((a, c) => a + c.qty * c.price, 0),
+    tax: 0,
+    total: saleItems.reduce((a, c) => a + c.qty * c.price, 0),
+  };
+
+  if (currentSaleEditId) {
+    await apiPUT(`${API_BASE}/sales/${currentSaleEditId}`, payload);
+  } else {
+    await apiPOST(`${API_BASE}/sales`, payload);
+  }
+
+  closeSaleModal();
+  await loadSales();
+  alert("Sale saved");
+}
+// ======================================================
+// DOCUMENTS MODULE
+// ======================================================
+async function initDocumentsPage() {
+  await loadDocuments();
+  const uploadBtn = document.getElementById("uploadDocsBtn");
+  if (uploadBtn) uploadBtn.addEventListener("click", uploadDocumentsHandler);
+  const fileInput = document.getElementById("docUpload");
+  if (fileInput) fileInput.addEventListener("change", () => { /* file selection only metadata saved */ });
+}
+
+async function loadDocuments() {
+  try {
+    const docs = await apiGET(`${API_BASE}/documents`);
+    const tbody = document.getElementById("docList");
+    if (!tbody) return;
+    tbody.innerHTML = "";
+    (Array.isArray(docs) ? docs : []).forEach(d => {
+      const tr = document.createElement("tr");
+      const sizeMB = ((d.size || 0) / (1024*1024)).toFixed(2);
+      tr.innerHTML = `<td>${escapeHtml(d.name||'')}</td><td>${sizeMB} MB</td><td>${new Date(d.date||Date.now()).toLocaleString()}</td>
+        <td>
+          <button class="doc-download" data-name="${encodeURIComponent(d.name||'')}">Download</button>
+          <button class="doc-delete" data-id="${d._id||d.id}">Delete</button>
+        </td>`;
+      tbody.appendChild(tr);
+    });
+
+    document.querySelectorAll('.doc-download').forEach(b => b.addEventListener('click', (e) => {
+      const name = decodeURIComponent(e.currentTarget.dataset.name || '');
+      window.open(`${API_BASE}/documents/download/${encodeURIComponent(name)}`, '_blank');
+    }));
+    document.querySelectorAll('.doc-delete').forEach(b => b.addEventListener('click', async (e) => {
+      if(!confirm('Delete document metadata?')) return;
+      const id = e.currentTarget.dataset.id;
+      await apiDELETE(`${API_BASE}/documents/${id}`);
+      await loadDocuments();
+    }));
+  } catch (err) {
+    console.error('loadDocuments', err);
+  }
+}
+
+async function uploadDocumentsHandler() {
+  const input = document.getElementById('docUpload');
+  if (!input || !input.files || input.files.length === 0) return alert('Select files to upload (metadata)');
+  if (!confirm(`Save metadata for ${input.files.length} file(s)?`)) return;
+  for (let i=0;i<input.files.length;i++){
+    const f = input.files[i];
+    await apiPOST(`${API_BASE}/documents`, { name: f.name, size: f.size, type: f.type });
+  }
+  await loadDocuments();
+  alert('Uploaded metadata.');
+}
+
+// ======================================================
+// COMPANY MODULE
+// ======================================================
+async function loadCompanyInfo(){
+  try {
+    const data = await apiGET(`${API_BASE}/company`);
+    if (!data) return;
+    const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+    setVal('companyName', data.name || '');
+    setVal('companyAddress', data.address || '');
+    setVal('companyPhone', data.phone || '');
+    setVal('companyEmail', data.email || '');
+    setVal('companyTax', data.taxNumber || data.tax || '');
+  } catch (err) { console.error('loadCompanyInfo', err); }
+}
+
+function bindCompanyEvents(){
+  const saveBtn = document.getElementById('saveCompany');
+  if (saveBtn) saveBtn.addEventListener('click', async () => {
+    const payload = {
+      name: (document.getElementById('companyName')||{}).value || '',
+      address: (document.getElementById('companyAddress')||{}).value || '',
+      phone: (document.getElementById('companyPhone')||{}).value || '',
+      email: (document.getElementById('companyEmail')||{}).value || '',
+      taxNumber: (document.getElementById('companyTax')||{}).value || ''
+    };
+    try {
+      await apiPOST(`${API_BASE}/company`, payload);
+      alert('Company info saved');
+    } catch (err) { console.error(err); alert('Failed to save company info'); }
+  });
+}
+
+// ======================================================
+// LOGS
+// ======================================================
+async function loadActivityLog(){
+  try {
+    const entries = await apiGET(`${API_BASE}/logs`);
+    const tbody = document.getElementById('logList');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    (Array.isArray(entries) ? entries : []).forEach(l => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${escapeHtml(l.user||'')}</td><td>${escapeHtml(l.action||'')}</td><td>${new Date(l.time||Date.now()).toLocaleString()}</td>`;
+      tbody.appendChild(tr);
+    });
+  } catch (err) { console.error('loadActivityLog', err); }
+}
+
+// ======================================================
+// PRODUCT EDIT PAGE
+// ======================================================
+function initProductEditPage(){
+  const params = new URLSearchParams(location.search);
+  const id = params.get('id');
+  if (id) {
+    apiGET(`${API_BASE}/inventory`).then(items => {
+      const it = (items||[]).find(x => (x._id||x.id) === id);
+      if (!it) return alert('Product not found');
+      (document.getElementById('prod_id')||{}).value = it._id || it.id;
+      (document.getElementById('prod_sku')||{}).value = it.sku || '';
+      (document.getElementById('prod_name')||{}).value = it.name || '';
+      (document.getElementById('prod_category')||{}).value = it.category || '';
+      (document.getElementById('prod_quantity')||{}).value = it.quantity || 0;
+      (document.getElementById('prod_unitCost')||{}).value = it.unitCost || 0;
+      (document.getElementById('prod_unitPrice')||{}).value = it.unitPrice || 0;
     });
   }
+
+  const saveBtn = document.getElementById('saveProductBtn');
+  if (saveBtn) saveBtn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const idVal = (document.getElementById('prod_id')||{}).value;
+    const payload = {
+      sku: (document.getElementById('prod_sku')||{}).value,
+      name: (document.getElementById('prod_name')||{}).value,
+      category: (document.getElementById('prod_category')||{}).value,
+      quantity: Number((document.getElementById('prod_quantity')||{}).value||0),
+      unitCost: Number((document.getElementById('prod_unitCost')||{}).value||0),
+      unitPrice: Number((document.getElementById('prod_unitPrice')||{}).value||0)
+    };
+    try {
+      await apiPUT(`${API_BASE}/inventory/${idVal}`, payload);
+      alert('Updated');
+      location.href = 'inventory.html';
+    } catch (err) { console.error(err); alert('Failed to update product'); }
+  });
+
+  const cancelBtn = document.getElementById('cancelProductBtn');
+  if (cancelBtn) cancelBtn.addEventListener('click', (e)=>{ e.preventDefault(); location.href='inventory.html'; });
+}
+
+// ======================================================
+// INVENTORY PAGE INIT (binds inputs & buttons)
+// ======================================================
+function initInventoryPage(){
+  loadInventory();
+  const addBtn = document.getElementById('addProductBtn');
+  if (addBtn) addBtn.addEventListener('click', addProductFromForm);
+
+  const addItemBtn = document.getElementById('addItemBtn') || document.getElementById('addProductBtn');
+  if (addItemBtn) addItemBtn.addEventListener('click', ()=> {
+    const modal = document.getElementById('productModal');
+    if (modal) modal.classList.remove('hidden');
+  });
+
+  const closeProductModal = document.getElementById('closeProductModal');
+  if (closeProductModal) closeProductModal.addEventListener('click', ()=> {
+    const modal = document.getElementById('productModal');
+    if (modal) modal.classList.add('hidden');
+  });
+
+  const saveProductBtn = document.getElementById('saveProductBtn');
+  if (saveProductBtn) saveProductBtn.addEventListener('click', saveProductModal);
+
+  const genPdfBtn = document.getElementById('generateInventoryPdfBtn');
+  if (genPdfBtn) genPdfBtn.addEventListener('click', ()=> window.open(`${API_BASE}/report/inventory/pdf`, '_blank'));
+
+  const searchInput = document.getElementById('searchInput');
+  if (searchInput) searchInput.addEventListener('input', (e)=> {
+    const q = (e.target.value||'').toLowerCase();
+    const filtered = (inventory||[]).filter(i => (i.sku||'').toLowerCase().includes(q) || (i.name||'').toLowerCase().includes(q) || (i.category||'').toLowerCase().includes(q));
+    // temp render
+    const tbody = document.getElementById('inventoryList') || document.getElementById('inventoryBody');
+    if (tbody){
+      tbody.innerHTML = "";
+      filtered.forEach(item => {
+        const qty = Number(item.quantity||0);
+        const uc = Number(item.unitCost||0);
+        const up = Number(item.unitPrice||0);
+        const invVal = qty * uc;
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${escapeHtml(item.sku||'')}</td><td>${escapeHtml(item.name||'')}</td><td>${escapeHtml(item.category||'')}</td><td>${qty}</td><td>${uc.toFixed(2)}</td><td>${up.toFixed(2)}</td><td>${invVal.toFixed(2)}</td>
+          <td><button class="btn-edit" data-id="${item._id||item.id}">Edit</button><button class="btn-delete" data-id="${item._id||item.id}">Delete</button></td>`;
+        tbody.appendChild(tr);
+      });
+    }
+  });
+
+  const clearBtn = document.getElementById('clearSearchBtn');
+  if (clearBtn) clearBtn.addEventListener('click', ()=> { const si = document.getElementById('searchInput'); if (si) si.value=''; loadInventory(); });
+}
+
+// ======================================================
+// LOGIN / REGISTER PAGE
+// ======================================================
+function bindLoginPage(){
+  const loginBtn = document.getElementById('loginBtn');
+  const registerBtn = document.getElementById('registerBtn');
+  const toggleToRegister = document.getElementById('toggleToRegister');
+  const toggleToLogin = document.getElementById('toggleToLogin');
+
+  if (loginBtn) loginBtn.addEventListener('click', async () => {
+    const user = (document.getElementById('username')||{}).value;
+    const pass = (document.getElementById('password')||{}).value;
+    if (!user || !pass) return alert('Enter username and password');
+    try {
+      const res = await apiPOST(`${API_BASE}/login`, { username: user, password: pass });
+      if (res && res.success) {
+        currentUser = { username: user };
+        sessionStorage.setItem('user', JSON.stringify(currentUser));
+        sessionStorage.setItem('isLoggedIn', 'true');
+        window.location.href = 'index.html';
+      } else {
+        alert(res && res.message ? res.message : 'Login failed');
+      }
+    } catch (err) { console.error(err); alert('Login error'); }
+  });
+
+  if (registerBtn) registerBtn.addEventListener('click', async () => {
+    const user = (document.getElementById('newUsername')||{}).value;
+    const pass = (document.getElementById('newPassword')||{}).value;
+    const code = (document.getElementById('securityCode')||{}).value;
+    if (!user || !pass || !code) return alert('Fill all fields');
+    try {
+      const res = await apiPOST(`${API_BASE}/register`, { username: user, password: pass, securityCode: code });
+      if (res && res.success) {
+        alert('Registered - please login');
+        document.getElementById('registerForm').style.display = 'none';
+        document.getElementById('loginForm').style.display = 'block';
+      } else {
+        alert(res && res.message ? res.message : 'Register failed');
+      }
+    } catch (err) { console.error(err); alert('Register error'); }
+  });
+
+  if (toggleToRegister) toggleToRegister.addEventListener('click', ()=> {
+    document.getElementById('loginForm').style.display = 'none';
+    document.getElementById('registerForm').style.display = 'block';
+  });
+  if (toggleToLogin) toggleToLogin.addEventListener('click', ()=> {
+    document.getElementById('registerForm').style.display = 'none';
+    document.getElementById('loginForm').style.display = 'block';
+  });
+}
+
+// ======================================================
+// FINAL BINDINGS: run page-specific binders where needed
+// ======================================================
+document.addEventListener('DOMContentLoaded', () => {
+  const page = document.documentElement.dataset.page;
+  if (page === 'inventory') initInventoryPage();
+  if (page === 'documents') initDocumentsPage();
+  if (page === 'orders') initOrdersPage();
+  if (page === 'sales') initSalesPage();
+  if (page === 'product') initProductEditPage();
+  if (page === 'log') loadActivityLog();
+  if (page === 'company') { loadCompanyInfo(); bindCompanyEvents(); }
+  if (location.pathname.endsWith('login.html')) bindLoginPage();
+
+  // Show admin name where available
+  const adminSpan = document.getElementById('adminName');
+  if (adminSpan && currentUser) adminSpan.textContent = currentUser.username;
 });
 
-// Expose some functions for inline onclick handlers (Important)
+// Expose small utilities for inline HTML usage
 window.logout = logout;
 window.toggleTheme = toggleTheme;
-window.openEditPageForItem = openEditPageForItem;
-window.confirmAndDeleteItem = confirmAndDeleteItem;
-window.openEditPageForOrder = openEditPageForOrder;
-window.confirmAndDeleteOrder = confirmAndDeleteOrder;
-window.openEditPageForSale = openEditPageForSale;
-window.confirmAndDeleteSale = confirmAndDeleteSale;
-window.downloadDocument = downloadDocument;
-window.deleteDocumentConfirm = deleteDocumentConfirm;
+window.openEditProduct = (id) => openEditProductModal(id);
+window.confirmDeleteProduct = async (id) => {
+  if (!confirm('Delete this product?')) return;
+  await apiDELETE(`${API_BASE}/inventory/${id}`);
+  await loadInventory();
+};
