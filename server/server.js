@@ -239,7 +239,7 @@ app.get('/api/inventory/report/pdf', async (req, res) => {
 
     // ---- RIGHT HEADER ----
     doc.fontSize(18).font("Helvetica-Bold")
-       .text("INVENTORY REPORT", 620, 40);
+       .text("INVENTORY REPORT", 40, 40);
 
     doc.fontSize(10).font("Helvetica");
     doc.text(`Print Date: ${printDate}`, 620, 63);
