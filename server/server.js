@@ -223,7 +223,7 @@ app.delete("/api/inventory/:id", async (req, res) => {
 });
 
 // ============================================================================
-//                 PDF REPORT — ALWAYS 1 PAGE UNLESS >10 ITEMS (FIXED)
+//                 PDF REPORT — FIXED (NO BLANK PAGES EVER)
 // ============================================================================
 app.get("/api/inventory/report/pdf", async (req, res) => {
   try {
@@ -245,10 +245,11 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
 
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.setHeader("Content-Type", "application/pdf");
+
     doc.pipe(res);
 
     // --------------------------
-    // HEADER (Only Page 1)
+    // HEADER (only first page)
     // --------------------------
     doc.fontSize(22).font("Helvetica-Bold").text("L&B Company", 40, 40);
     doc.fontSize(10).font("Helvetica");
@@ -271,45 +272,23 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
     // TABLE SETTINGS
     // --------------------------
     const rowHeight = 18;
-
     const colX = {
-      sku: 40,
-      name: 100,
-      category: 260,
-      qty: 340,
-      cost: 400,
-      price: 480,
-      value: 560,
-      revenue: 670
+      sku: 40, name: 100, category: 260, qty: 340,
+      cost: 400, price: 480, value: 560, revenue: 670
     };
-
     const width = {
-      sku: 60,
-      name: 160,
-      category: 80,
-      qty: 60,
-      cost: 80,
-      price: 80,
-      value: 110,
-      revenue: 120
+      sku: 60, name: 160, category: 80, qty: 60,
+      cost: 80, price: 80, value: 110, revenue: 120
     };
 
     let y = 150;
+    let rowsOnPage = 0;
 
-    // --------------------------
-    // TABLE HEADER FUNCTION
-    // --------------------------
     function drawHeader() {
       doc.font("Helvetica-Bold").fontSize(10);
-      doc.rect(colX.sku, y, width.sku, rowHeight).stroke();
-      doc.rect(colX.name, y, width.name, rowHeight).stroke();
-      doc.rect(colX.category, y, width.category, rowHeight).stroke();
-      doc.rect(colX.qty, y, width.qty, rowHeight).stroke();
-      doc.rect(colX.cost, y, width.cost, rowHeight).stroke();
-      doc.rect(colX.price, y, width.price, rowHeight).stroke();
-      doc.rect(colX.value, y, width.value, rowHeight).stroke();
-      doc.rect(colX.revenue, y, width.revenue, rowHeight).stroke();
-
+      for (const col of Object.keys(colX)) {
+        doc.rect(colX[col], y, width[col], rowHeight).stroke();
+      }
       doc.text("SKU", colX.sku + 3, y + 4);
       doc.text("Product Name", colX.name + 3, y + 4);
       doc.text("Category", colX.category + 3, y + 4);
@@ -325,28 +304,22 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
 
     drawHeader();
 
-    // --------------------------
-    // ROW DRAWING
-    // --------------------------
-    let subtotalQty = 0;
-    let totalValue = 0;
-    let totalRevenue = 0;
-    let rowCount = 0;
+    let subtotalQty = 0, totalValue = 0, totalRevenue = 0;
 
+    // --------------------------
+    // TABLE ROWS (10 rows per page)
+    // --------------------------
     for (const it of items) {
-
-      // PAGE BREAK — Only if > 10 items
-      if (rowCount === 10) {
+      if (rowsOnPage === 10) {
         doc.addPage({ size: "A4", layout: "landscape", margin: 40 });
         y = 40;
-        rowCount = 0;
+        rowsOnPage = 0;
         drawHeader();
       }
 
       const qty = Number(it.quantity || 0);
       const cost = Number(it.unitCost || 0);
       const price = Number(it.unitPrice || 0);
-
       const val = qty * cost;
       const rev = qty * price;
 
@@ -354,14 +327,9 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
       totalValue += val;
       totalRevenue += rev;
 
-      doc.rect(colX.sku, y, width.sku, rowHeight).stroke();
-      doc.rect(colX.name, y, width.name, rowHeight).stroke();
-      doc.rect(colX.category, y, width.category, rowHeight).stroke();
-      doc.rect(colX.qty, y, width.qty, rowHeight).stroke();
-      doc.rect(colX.cost, y, width.cost, rowHeight).stroke();
-      doc.rect(colX.price, y, width.price, rowHeight).stroke();
-      doc.rect(colX.value, y, width.value, rowHeight).stroke();
-      doc.rect(colX.revenue, y, width.revenue, rowHeight).stroke();
+      for (const col of Object.keys(colX)) {
+        doc.rect(colX[col], y, width[col], rowHeight).stroke();
+      }
 
       doc.text(it.sku || "", colX.sku + 3, y + 4);
       doc.text(it.name || "", colX.name + 3, y + 4);
@@ -373,55 +341,54 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
       doc.text(`RM ${rev.toFixed(2)}`, colX.revenue + 3, y + 4);
 
       y += rowHeight;
-      rowCount++;
+      rowsOnPage++;
     }
 
     // --------------------------
-    // FIXED TOTALS BOX — NO OVERFLOW
+    // TOTAL BOX (always safe)
     // --------------------------
-    const lastPage = doc.bufferedPageRange().count - 1;
-    doc.switchToPage(lastPage);
+    const last = doc.bufferedPageRange().count - 1;
+    doc.switchToPage(last);
 
-    let totalsY = y + 20;
-    if (totalsY > 480) totalsY = 480;  // <-- prevents blank pages
+    let boxY = y + 20;
+    if (boxY > 480) boxY = 480;
 
-    doc.rect(560, totalsY, 230, 68).stroke();
+    doc.rect(560, boxY, 230, 68).stroke();
+
     doc.font("Helvetica-Bold").fontSize(10);
-    doc.text(`Subtotal (Quantity): ${subtotalQty} units`, 570, totalsY + 10);
-    doc.text(`Total Inventory Value: RM ${totalValue.toFixed(2)}`, 570, totalsY + 28);
-    doc.text(`Total Potential Revenue: RM ${totalRevenue.toFixed(2)}`, 570, totalsY + 46);
+    doc.text(`Subtotal (Quantity): ${subtotalQty} units`, 570, boxY + 10);
+    doc.text(`Total Inventory Value: RM ${totalValue.toFixed(2)}`, 570, boxY + 28);
+    doc.text(`Total Potential Revenue: RM ${totalRevenue.toFixed(2)}`, 570, boxY + 46);
 
     // --------------------------
-    // FOOTER on every page
+    // FORCE PAGE RENDER COMPLETE
+    // --------------------------
+    doc.flushPages();
+
+    // --------------------------
+    // FOOTER + PAGE NUMBERS (SAFE)
     // --------------------------
     const pages = doc.bufferedPageRange();
     for (let i = 0; i < pages.count; i++) {
       doc.switchToPage(i);
-      doc.fontSize(9)
-         .text("Generated by L&B Company Inventory System",
-               0, doc.page.height - 40,
-               { align: "center" });
-    }
-
-    // --------------------------
-    // PAGE NUMBERS
-    // --------------------------
-    for (let i = 0; i < pages.count; i++) {
-      doc.switchToPage(i);
-      doc.fontSize(9)
-         .text(`Page ${i + 1} of ${pages.count}`,
-               0, doc.page.height - 25,
-               { align: "center" });
+      doc.fontSize(9).text(
+        "Generated by L&B Company Inventory System",
+        0, doc.page.height - 40,
+        { align: "center" }
+      );
+      doc.text(`Page ${i + 1} of ${pages.count}`,
+        0, doc.page.height - 25,
+        { align: "center" }
+      );
     }
 
     doc.end();
 
   } catch (err) {
-    console.error("PDF generate error", err);
+    console.error("PDF Error:", err);
     res.status(500).json({ message: "PDF generation failed" });
   }
 });
-
 
 // ============================================================================
 //                                   XLSX REPORT
