@@ -1,5 +1,5 @@
 // server/server.js
-// MongoDB (Mongoose) based server for Online Inventory & Documents Management System
+// MongoDB based server for Online Inventory & Documents Management System
 
 const express = require('express');
 const cors = require('cors');
@@ -155,7 +155,6 @@ app.post("/api/login", async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
-
 // ============================================================================
 //                                 INVENTORY CRUD
 // ============================================================================
@@ -223,7 +222,7 @@ app.delete("/api/inventory/:id", async (req, res) => {
 });
 
 // ============================================================================
-//                 PDF REPORT — FIXED (NO BLANK PAGES EVER)
+//                    PDF REPORT — FIXED VERSION (NO BLANK PAGES)
 // ============================================================================
 app.get("/api/inventory/report/pdf", async (req, res) => {
   try {
@@ -236,6 +235,9 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
 
     const filename = `Inventory_Report_${now.toISOString().slice(0, 10)}.pdf`;
 
+    // -------------------------
+    // CREATE PDF DOCUMENT
+    // -------------------------
     const doc = new PDFDocument({
       size: "A4",
       layout: "landscape",
@@ -248,47 +250,72 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
 
     doc.pipe(res);
 
-    // --------------------------
-    // HEADER (only first page)
-    // --------------------------
-    doc.fontSize(22).font("Helvetica-Bold").text("L&B Company", 40, 40);
+    // -------------------------------------------------
+    // HEADER (ONLY PAGE 1)
+    // -------------------------------------------------
+    doc.fontSize(22).font("Helvetica-Bold")
+      .text("L&B Company", 40, 40);
+
     doc.fontSize(10).font("Helvetica");
     doc.text("Jalan Mawar 8, Taman Bukit Beruang Permai, Melaka", 40, 70);
     doc.text("Phone: 01133127622", 40, 85);
     doc.text("Email: lbcompany@gmail.com", 40, 100);
 
     doc.font("Helvetica-Bold").fontSize(15)
-       .text("INVENTORY REPORT", 620, 40);
+      .text("INVENTORY REPORT", 620, 40);
 
     doc.font("Helvetica").fontSize(10);
     doc.text(`Print Date: ${printDate}`, 620, 63);
     doc.text(`Report ID: ${reportId}`, 620, 78);
-    doc.text(`Status: Generated`, 620, 93);
+    doc.text("Status: Generated", 620, 93);
     doc.text(`Printed by: ${printedBy}`, 620, 108);
 
     doc.moveTo(40, 130).lineTo(800, 130).stroke();
 
-    // --------------------------
+    // -------------------------------------------------
     // TABLE SETTINGS
-    // --------------------------
+    // -------------------------------------------------
     const rowHeight = 18;
+
     const colX = {
-      sku: 40, name: 100, category: 260, qty: 340,
-      cost: 400, price: 480, value: 560, revenue: 670
+      sku: 40,
+      name: 100,
+      category: 260,
+      qty: 340,
+      cost: 400,
+      price: 480,
+      value: 560,
+      revenue: 670
     };
+
     const width = {
-      sku: 60, name: 160, category: 80, qty: 60,
-      cost: 80, price: 80, value: 110, revenue: 120
+      sku: 60,
+      name: 160,
+      category: 80,
+      qty: 60,
+      cost: 80,
+      price: 80,
+      value: 110,
+      revenue: 120
     };
 
     let y = 150;
-    let rowsOnPage = 0;
 
+    // -------------------------------------------------
+    // DRAW TABLE HEADER
+    // -------------------------------------------------
     function drawHeader() {
       doc.font("Helvetica-Bold").fontSize(10);
-      for (const col of Object.keys(colX)) {
-        doc.rect(colX[col], y, width[col], rowHeight).stroke();
-      }
+
+      doc.rect(colX.sku, y, width.sku, rowHeight).stroke();
+      doc.rect(colX.name, y, width.name, rowHeight).stroke();
+      doc.rect(colX.category, y, width.category, rowHeight).stroke();
+      doc.rect(colX.qty, y, width.qty, rowHeight).stroke();
+      doc.rect(colX.cost, y, width.cost, rowHeight).stroke();
+      doc.rect(colX.price, y, width.price, rowHeight).stroke();
+      doc.rect(colX.value, y, width.value, rowHeight).stroke();
+      doc.rect(colX.revenue, y, width.revenue, rowHeight).stroke();
+
       doc.text("SKU", colX.sku + 3, y + 4);
       doc.text("Product Name", colX.name + 3, y + 4);
       doc.text("Category", colX.category + 3, y + 4);
@@ -299,27 +326,35 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
       doc.text("Total Potential Revenue", colX.revenue + 3, y + 4);
 
       y += rowHeight;
+
       doc.font("Helvetica").fontSize(9);
     }
 
     drawHeader();
 
-    let subtotalQty = 0, totalValue = 0, totalRevenue = 0;
+    // -------------------------------------------------
+    // ROW LOOP (MAX 10 ROWS PER PAGE)
+    // -------------------------------------------------
+    let subtotalQty = 0;
+    let totalValue = 0;
+    let totalRevenue = 0;
 
-    // --------------------------
-    // TABLE ROWS (10 rows per page)
-    // --------------------------
+    let rowCount = 0;
+
     for (const it of items) {
-      if (rowsOnPage === 10) {
+
+      // FORCE PAGE BREAK ONLY IF >10 ITEMS
+      if (rowCount === 10) {
         doc.addPage({ size: "A4", layout: "landscape", margin: 40 });
         y = 40;
-        rowsOnPage = 0;
+        rowCount = 0;
         drawHeader();
       }
 
       const qty = Number(it.quantity || 0);
       const cost = Number(it.unitCost || 0);
       const price = Number(it.unitPrice || 0);
+
       const val = qty * cost;
       const rev = qty * price;
 
@@ -327,10 +362,17 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
       totalValue += val;
       totalRevenue += rev;
 
-      for (const col of Object.keys(colX)) {
-        doc.rect(colX[col], y, width[col], rowHeight).stroke();
-      }
+      // Row borders
+      doc.rect(colX.sku, y, width.sku, rowHeight).stroke();
+      doc.rect(colX.name, y, width.name, rowHeight).stroke();
+      doc.rect(colX.category, y, width.category, rowHeight).stroke();
+      doc.rect(colX.qty, y, width.qty, rowHeight).stroke();
+      doc.rect(colX.cost, y, width.cost, rowHeight).stroke();
+      doc.rect(colX.price, y, width.price, rowHeight).stroke();
+      doc.rect(colX.value, y, width.value, rowHeight).stroke();
+      doc.rect(colX.revenue, y, width.revenue, rowHeight).stroke();
 
+      // Text
       doc.text(it.sku || "", colX.sku + 3, y + 4);
       doc.text(it.name || "", colX.name + 3, y + 4);
       doc.text(it.category || "", colX.category + 3, y + 4);
@@ -341,49 +383,68 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
       doc.text(`RM ${rev.toFixed(2)}`, colX.revenue + 3, y + 4);
 
       y += rowHeight;
-      rowsOnPage++;
+      rowCount++;
+    }
+    // -------------------------------------------------
+    // TOTALS BOX (ONLY ON LAST PAGE)
+    // -------------------------------------------------
+    function drawTotalsBox() {
+
+      // Keep totals near the last table row
+      let boxY = y + 20;
+      if (boxY < 200) boxY = 200;
+
+      const boxX = 560;
+      const boxW = 230;
+      const boxH = 68;
+
+      doc.rect(boxX, boxY, boxW, boxH).stroke();
+
+      doc.font("Helvetica-Bold").fontSize(10);
+      doc.text(`Subtotal (Quantity): ${subtotalQty} units`, boxX + 10, boxY + 10);
+      doc.text(`Total Inventory Value: RM ${totalValue.toFixed(2)}`, boxX + 10, boxY + 28);
+      doc.text(`Total Potential Revenue: RM ${totalRevenue.toFixed(2)}`, boxX + 10, boxY + 46);
     }
 
-    // --------------------------
-    // TOTAL BOX (always safe)
-    // --------------------------
-    const last = doc.bufferedPageRange().count - 1;
-    doc.switchToPage(last);
+    drawTotalsBox();
 
-    let boxY = y + 20;
-    if (boxY > 480) boxY = 480;
+    // -------------------------------------------------
+    // FOOTER ON **EVERY REAL PAGE**
+    // -------------------------------------------------
+    const pageRange = doc.bufferedPageRange(); // { start, count }
 
-    doc.rect(560, boxY, 230, 68).stroke();
+    for (let i = 0; i < pageRange.count; i++) {
+      doc.switchToPage(i);
 
-    doc.font("Helvetica-Bold").fontSize(10);
-    doc.text(`Subtotal (Quantity): ${subtotalQty} units`, 570, boxY + 10);
-    doc.text(`Total Inventory Value: RM ${totalValue.toFixed(2)}`, 570, boxY + 28);
-    doc.text(`Total Potential Revenue: RM ${totalRevenue.toFixed(2)}`, 570, boxY + 46);
+      doc.font("Helvetica").fontSize(9).text(
+        "Generated by L&B Company Inventory System",
+        0,
+        doc.page.height - 40,
+        { align: "center" }
+      );
+    }
 
-    // --------------------------
-    // FORCE PAGE RENDER COMPLETE
-    // --------------------------
-    doc.flushPages();
+    // -------------------------------------------------
+    // PAGE NUMBERS (after footer)
+    // -------------------------------------------------
+    for (let i = 0; i < pageRange.count; i++) {
+      doc.switchToPage(i);
 
-// ------------------------------------------------------
-// FOOTER ON EVERY PAGE (SAFE — NO BLANK PAGES)
-// ------------------------------------------------------
-const range = doc.bufferedPageRange(); // get total pages ONLY ONCE
+      doc.font("Helvetica").fontSize(9).text(
+        `Page ${i + 1} of ${pageRange.count}`,
+        0,
+        doc.page.height - 25,
+        { align: "center" }
+      );
+    }
 
-for (let i = 0; i < range.count; i++) {
-  doc.switchToPage(i);
+    doc.end();
 
-  doc.font("Helvetica").fontSize(9).text(
-    "Generated by L&B Company Inventory System",
-    0,
-    doc.page.height - 40,
-    { align: "center" }
-  );
-}
-
-// FINALIZE PDF -> MUST BE LAST LINE
-doc.end();
-
+  } catch (err) {
+    console.error("PDF Error:", err);
+    res.status(500).json({ message: "PDF generation failed" });
+  }
+});
 
 // ============================================================================
 //                                   XLSX REPORT
@@ -486,7 +547,7 @@ app.delete("/api/documents/:id", async (req, res) => {
 });
 
 // ============================================================================
-//                               ACTIVITY LOGS
+//                                   ACTIVITY LOGS
 // ============================================================================
 app.get("/api/logs", async (req, res) => {
   try {
@@ -515,11 +576,11 @@ app.get("*", (req, res) => {
 });
 
 // ============================================================================
-//                        STARTUP HELPER + START SERVER
+//                         STARTUP + SERVER START
 // ============================================================================
 async function ensureDefaultAdminAndStartupLog() {
   try {
-    const count = await User.countDocuments({}).exec();
+    const count = await User.countDocuments().exec();
     if (count === 0) {
       await User.create({ username: "admin", password: "password" });
       await logActivity("System", "Default admin user created");
