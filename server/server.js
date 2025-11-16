@@ -238,8 +238,8 @@ app.get('/api/inventory/report/pdf', async (req, res) => {
     doc.text("Email: lbcompany@gmail.com", 40, 100);
 
     // ---- RIGHT HEADER ----
-    doc.fontSize(18).font("Helvetica-Bold")
-       .text("INVENTORY REPORT", 40, 40);
+    doc.fontSize(15).font("Helvetica-Bold")
+       .text("INVENTORY REPORT", 620, 40);
 
     doc.fontSize(10).font("Helvetica");
     doc.text(`Print Date: ${printDate}`, 620, 63);
