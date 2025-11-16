@@ -13,14 +13,10 @@
     <a href="index.html">Home</a>
     <a href="inventory.html">Inventory</a>
     <a href="documents.html">Documents</a>
-
-    <!-- ⭐ Admin Only -->
-    <a href="log.html" class="admin-only">Activity Log</a>
-
+    <a href="log.html">Activity Log</a>
     <a href="setting.html"><button>⚙️ Setting</button></a>
     <button onclick="toggleTheme()">🌓 Mode</button>
     <button onclick="logout()">🚪 Logout</button>
-
     <div id="adminInfo">Logged in as: <span id="adminName"></span></div>
   </nav>
 </header>
@@ -35,9 +31,7 @@
         <ul>
             <li>📦 Manage inventory with SKU tracking.</li>
             <li>📄 Upload and manage important documents.</li>
-
-            <!-- ⭐ Admin Only (remove if user) -->
-            <li class="admin-only">🕒 Review all actions in your activity log.</li>
+            <li>🕒 Review all actions in your activity log.</li>
         </ul>
 
         <div class="info-card" style="margin-top: 20px;">
@@ -63,8 +57,7 @@
         </div>
     </div>
     
-    <!-- ⭐ ADMIN ONLY: Recent Activity Log -->
-    <div style="grid-column: 1 / -1;" class="info-card admin-only">
+    <div style="grid-column: 1 / -1;" class="info-card">
         <h3>🕒 Recent Activity Log</h3>
         <table>
           <thead>
@@ -80,7 +73,7 @@
 </section>
 
 <script src="js/setting.js" defer></script>
-script src="js/script.js" defer></script>
+<script src="js/script.js" defer></script>
 <script>
   // Realtime clock
   function updateClock() {
