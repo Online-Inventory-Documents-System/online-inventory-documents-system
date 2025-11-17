@@ -1,6 +1,5 @@
 // server/server.js
 // MongoDB (Mongoose) based server for Online Inventory & Documents Management System
-// Updated: adds robust document upload/download support (multer + storing buffers in MongoDB)
 
 const express = require('express');
 const cors = require('cors');
@@ -8,7 +7,6 @@ const xlsx = require('xlsx');
 const mongoose = require('mongoose');
 const path = require('path');
 const PDFDocument = require('pdfkit');   // PDF generator
-const multer = require('multer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -17,17 +15,8 @@ const SECURITY_CODE = process.env.SECRET_SECURITY_CODE || "1234";
 
 // ===== Middleware =====
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// ===== Multer (for file uploads) =====
-// memory storage so we can store file buffer directly into MongoDB
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 50 * 1024 * 1024 // 50 MB per file (adjust if needed)
-  }
-});
 
 // ===== MongoDB Connection =====
 if (!MONGODB_URI) {
@@ -67,13 +56,10 @@ const InventorySchema = new Schema({
 });
 const Inventory = mongoose.model("Inventory", InventorySchema);
 
-// Document schema now stores binary data and content type (optional)
 const DocumentSchema = new Schema({
-  name: { type: String, required: true },
-  size: { type: Number, default: 0 },
-  date: { type: Date, default: Date.now },
-  contentType: { type: String, default: '' },
-  data: { type: Buffer, select: false } // do not return the data by default
+  name: String,
+  size: Number,
+  date: { type: Date, default: Date.now }
 });
 const Doc = mongoose.model("Doc", DocumentSchema);
 
@@ -127,7 +113,6 @@ app.get("/api/test", (req, res) => {
 // ============================================================================
 //                               AUTH SYSTEM
 // ============================================================================
-// (unchanged behavior — basic username/password authentication)
 app.post("/api/register", async (req, res) => {
   const { username, password, securityCode } = req.body || {};
 
@@ -174,7 +159,6 @@ app.post("/api/login", async (req, res) => {
 // ============================================================================
 //                                 INVENTORY CRUD
 // ============================================================================
-// (unchanged from your original; kept behavior)
 app.get("/api/inventory", async (req, res) => {
   try {
     const items = await Inventory.find({}).lean();
@@ -241,7 +225,6 @@ app.delete("/api/inventory/:id", async (req, res) => {
 // ============================================================================
 //                    PDF REPORT — SAVE PDF BYTES + LOG + STREAM
 // ============================================================================
-// (kept your implementation; adjusted Doc.create to include buffer fields if needed)
 app.get("/api/inventory/report/pdf", async (req, res) => {
   try {
     const items = await Inventory.find({}).lean();
@@ -487,7 +470,6 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
 // ============================================================================
 //                                   XLSX REPORT
 // ============================================================================
-// (keeps your behavior, but save doc record without buffer; you could also include buffer similarly)
 app.get("/api/inventory/report", async (req, res) => {
   try {
     const items = await Inventory.find({}).lean();
@@ -534,8 +516,7 @@ app.get("/api/inventory/report", async (req, res) => {
     xlsx.utils.book_append_sheet(wb, ws, "Inventory Report");
     const wb_out = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
 
-    // Save basic metadata to Doc collection (not storing binary by default here)
-    await Doc.create({ name: filename, size: wb_out.length, date: new Date(), contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    await Doc.create({ name: filename, size: wb_out.length, date: new Date() });
     await logActivity(req.headers["x-username"], `Generated Inventory Report XLSX`);
 
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
@@ -549,87 +530,29 @@ app.get("/api/inventory/report", async (req, res) => {
 });
 
 // ============================================================================
-//                                   DOCUMENTS CRUD (UPLOAD/DOWNLOAD)
+//                                   DOCUMENTS CRUD
 // ============================================================================
-
-// GET list of documents (safe fields only; no binary data returned)
 app.get("/api/documents", async (req, res) => {
   try {
     const docs = await Doc.find({}).sort({ date: -1 }).lean();
-    // map to minimal representation and provide download URL
-    const mapped = docs.map(d => ({
-      id: d._id.toString(),
-      name: d.name,
-      size: d.size,
-      date: d.date,
-      contentType: d.contentType,
-      downloadUrl: `/api/documents/download/${d._id.toString()}`
-    }));
-    res.json(mapped);
+    res.json(docs.map(d => ({ ...d, id: d._id.toString() })));
   } catch (err) {
-    console.error("documents list error", err);
+    console.error(err);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-// UPLOAD document (multipart/form-data with field "file")
-app.post("/api/documents/upload", upload.single("file"), async (req, res) => {
+app.post("/api/documents", async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ message: "No file uploaded (use 'file' field)" });
-
-    const file = req.file; // {buffer, originalname, mimetype, size}
-    const created = await Doc.create({
-      name: file.originalname,
-      size: file.size,
-      date: new Date(),
-      contentType: file.mimetype,
-      data: file.buffer
-    });
-
-    await logActivity(req.headers["x-username"], `Uploaded document: ${created.name}`);
-
-    res.status(201).json({
-      id: created._id.toString(),
-      name: created.name,
-      size: created.size,
-      date: created.date,
-      downloadUrl: `/api/documents/download/${created._id.toString()}`
-    });
+    const docu = await Doc.create({ ...req.body, date: new Date() });
+    await logActivity(req.headers["x-username"], `Uploaded document: ${docu.name}`);
+    res.status(201).json({ ...docu.toObject(), id: docu._id.toString() });
   } catch (err) {
-    console.error("document upload error", err);
+    console.error(err);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-// DOWNLOAD document by id (streams buffer from MongoDB)
-app.get("/api/documents/download/:id", async (req, res) => {
-  try {
-    const docId = req.params.id;
-    const doc = await Doc.findById(docId).select("+data +contentType").exec();
-    if (!doc) return res.status(404).json({ message: "Document not found" });
-
-    const filename = doc.name || `document-${doc._id.toString()}`;
-    const contentType = doc.contentType || 'application/octet-stream';
-    const size = doc.size || (doc.data ? doc.data.length : 0);
-
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.setHeader("Content-Type", contentType);
-    res.setHeader("Content-Length", size);
-
-    // If data field exists, send it; otherwise 404
-    if (doc.data && doc.data.length) {
-      return res.send(doc.data);
-    } else {
-      // No binary data stored (maybe metadata-only doc)
-      return res.status(404).json({ message: "Document binary not available" });
-    }
-  } catch (err) {
-    console.error("document download error", err);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// DELETE document by id (removes DB record)
 app.delete("/api/documents/:id", async (req, res) => {
   try {
     const docu = await Doc.findByIdAndDelete(req.params.id);
@@ -639,7 +562,7 @@ app.delete("/api/documents/:id", async (req, res) => {
     res.status(204).send();
 
   } catch (err) {
-    console.error("document delete error", err);
+    console.error(err);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -647,7 +570,6 @@ app.delete("/api/documents/:id", async (req, res) => {
 // ============================================================================
 //                               ACTIVITY LOGS
 // ============================================================================
-// (unchanged)
 app.get("/api/logs", async (req, res) => {
   try {
     const logs = await ActivityLog.find({}).sort({ time: -1 }).limit(500).lean();
@@ -665,7 +587,6 @@ app.get("/api/logs", async (req, res) => {
 // ============================================================================
 //                              SERVE FRONTEND
 // ============================================================================
-// Serve public folder
 app.use(express.static(path.join(__dirname, "../public")));
 
 app.get("*", (req, res) => {
