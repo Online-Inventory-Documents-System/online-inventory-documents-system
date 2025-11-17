@@ -223,23 +223,35 @@ app.delete("/api/inventory/:id", async (req, res) => {
 });
 
 // ============================================================================
-//                 PDF REPORT — SAVE TO DOCUMENTS + LOG USER ACTION
+//                    PDF REPORT — SAVE PDF BYTES + LOG + STREAM
 // ============================================================================
 app.get("/api/inventory/report/pdf", async (req, res) => {
   try {
     const items = await Inventory.find({}).lean();
 
     const now = new Date();
-    const printDate = now.toLocaleString();
+
+    // ---------- TIMEZONE-AWARE PRINT DATE (Asia/Kuala_Lumpur) ----------
+    const printDate = new Date(now).toLocaleString('en-US', {
+      timeZone: 'Asia/Kuala_Lumpur',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    });
+
     const reportId = `REP-${Date.now()}`;
     const printedBy = req.headers["x-username"] || "System";
 
+    // include ms timestamp so filename is unique
     const filename = `Inventory_Report_${now.toISOString().slice(0, 10)}_${Date.now()}.pdf`;
 
-    // ============================
-    // Prepare PDF buffer collector
-    // ============================
+    // collect chunks so we can save the PDF bytes after generation
     let pdfChunks = [];
+
     const doc = new PDFDocument({
       size: "A4",
       layout: "landscape",
@@ -247,33 +259,34 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
       bufferPages: true
     });
 
-    // Capture PDF buffer
+    // collect buffer chunks to save later
     doc.on("data", chunk => pdfChunks.push(chunk));
+
+    // when PDF finishes, save to Docs collection and log
     doc.on("end", async () => {
-      const pdfBuffer = Buffer.concat(pdfChunks);
-
-      // Save PDF record in Document database
-      await Doc.create({
-        name: filename,
-        size: pdfBuffer.length,
-        date: new Date()
-      });
-
-      // Log user action
-      await logActivity(
-        printedBy,
-        `Generated Inventory Report PDF: ${filename}`
-      );
+      try {
+        const pdfBuffer = Buffer.concat(pdfChunks);
+        await Doc.create({
+          name: filename,
+          size: pdfBuffer.length,
+          date: new Date(),
+          data: pdfBuffer,
+          contentType: "application/pdf"
+        });
+        await logActivity(printedBy, `Generated Inventory Report PDF: ${filename}`);
+      } catch (saveErr) {
+        console.error("Failed to save PDF to documents collection:", saveErr);
+      }
     });
 
-    // Also send PDF to user
+    // stream to response for immediate download
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.setHeader("Content-Type", "application/pdf");
     doc.pipe(res);
 
-    // =====================================================
-    // HEADER (Only shown on First Page)
-    // =====================================================
+    // -------------------------------------------------
+    // HEADER (Only first page)
+    // -------------------------------------------------
     doc.fontSize(22).font("Helvetica-Bold").text("L&B Company", 40, 40);
     doc.fontSize(10).font("Helvetica");
     doc.text("Jalan Mawar 8, Taman Bukit Beruang Permai, Melaka", 40, 70);
@@ -283,6 +296,7 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
     doc.font("Helvetica-Bold").fontSize(15)
        .text("INVENTORY REPORT", 620, 40);
 
+    // Use the timezone-correct printDate
     doc.font("Helvetica").fontSize(10);
     doc.text(`Print Date: ${printDate}`, 620, 63);
     doc.text(`Report ID: ${reportId}`, 620, 78);
@@ -291,27 +305,50 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
 
     doc.moveTo(40, 130).lineTo(800, 130).stroke();
 
-    // =====================================================
+    // -------------------------------------------------
     // TABLE SETTINGS
-    // =====================================================
+    // -------------------------------------------------
     const rowHeight = 18;
+
     const colX = {
-      sku: 40, name: 100, category: 260, qty: 340,
-      cost: 400, price: 480, value: 560, revenue: 670
+      sku: 40,
+      name: 100,
+      category: 260,
+      qty: 340,
+      cost: 400,
+      price: 480,
+      value: 560,
+      revenue: 670
     };
+
     const width = {
-      sku: 60, name: 160, category: 80, qty: 60,
-      cost: 80, price: 80, value: 110, revenue: 120
+      sku: 60,
+      name: 160,
+      category: 80,
+      qty: 60,
+      cost: 80,
+      price: 80,
+      value: 110,
+      revenue: 120
     };
 
     let y = 150;
-    let rowsOnPage = 0;
 
+    // -------------------------------------------------
+    // DRAW TABLE HEADER
+    // -------------------------------------------------
     function drawHeader() {
       doc.font("Helvetica-Bold").fontSize(10);
-      for (const col of Object.keys(colX)) {
-        doc.rect(colX[col], y, width[col], rowHeight).stroke();
-      }
+
+      doc.rect(colX.sku, y, width.sku, rowHeight).stroke();
+      doc.rect(colX.name, y, width.name, rowHeight).stroke();
+      doc.rect(colX.category, y, width.category, rowHeight).stroke();
+      doc.rect(colX.qty, y, width.qty, rowHeight).stroke();
+      doc.rect(colX.cost, y, width.cost, rowHeight).stroke();
+      doc.rect(colX.price, y, width.price, rowHeight).stroke();
+      doc.rect(colX.value, y, width.value, rowHeight).stroke();
+      doc.rect(colX.revenue, y, width.revenue, rowHeight).stroke();
+
       doc.text("SKU", colX.sku + 3, y + 4);
       doc.text("Product Name", colX.name + 3, y + 4);
       doc.text("Category", colX.category + 3, y + 4);
@@ -322,17 +359,24 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
       doc.text("Total Potential Revenue", colX.revenue + 3, y + 4);
 
       y += rowHeight;
+
       doc.font("Helvetica").fontSize(9);
     }
 
     drawHeader();
+  // -------------------------------------------------
+    // ROW LOOP (MAX 10 ROWS PER PAGE)
+    // -------------------------------------------------
+    let subtotalQty = 0;
+    let totalValue = 0;
+    let totalRevenue = 0;
 
-    let subtotalQty = 0, totalValue = 0, totalRevenue = 0;
+    let rowCount = 0;
+    let rowsOnPage = 0;
 
-    // =====================================================
-    // TABLE ROWS — max 10 per page
-    // =====================================================
     for (const it of items) {
+
+      // Force page break if 10 rows on current page already
       if (rowsOnPage === 10) {
         doc.addPage({ size: "A4", layout: "landscape", margin: 40 });
         y = 40;
@@ -343,6 +387,7 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
       const qty = Number(it.quantity || 0);
       const cost = Number(it.unitCost || 0);
       const price = Number(it.unitPrice || 0);
+
       const val = qty * cost;
       const rev = qty * price;
 
@@ -350,10 +395,17 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
       totalValue += val;
       totalRevenue += rev;
 
-      for (const col of Object.keys(colX)) {
-        doc.rect(colX[col], y, width[col], rowHeight).stroke();
-      }
+      // Row borders
+      doc.rect(colX.sku, y, width.sku, rowHeight).stroke();
+      doc.rect(colX.name, y, width.name, rowHeight).stroke();
+      doc.rect(colX.category, y, width.category, rowHeight).stroke();
+      doc.rect(colX.qty, y, width.qty, rowHeight).stroke();
+      doc.rect(colX.cost, y, width.cost, rowHeight).stroke();
+      doc.rect(colX.price, y, width.price, rowHeight).stroke();
+      doc.rect(colX.value, y, width.value, rowHeight).stroke();
+      doc.rect(colX.revenue, y, width.revenue, rowHeight).stroke();
 
+      // Row text
       doc.text(it.sku || "", colX.sku + 3, y + 4);
       doc.text(it.name || "", colX.name + 3, y + 4);
       doc.text(it.category || "", colX.category + 3, y + 4);
@@ -365,13 +417,14 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
 
       y += rowHeight;
       rowsOnPage++;
+      rowCount++;
     }
 
-    // =====================================================
-    // TOTAL BOX (Last Page)
-    // =====================================================
-    const last = doc.bufferedPageRange().count - 1;
-    doc.switchToPage(last);
+    // -------------------------------------------------
+    // TOTALS BOX (LAST PAGE)
+    // -------------------------------------------------
+    const lastPageIndex = doc.bufferedPageRange().count - 1;
+    doc.switchToPage(lastPageIndex);
 
     let boxY = y + 20;
     if (boxY > 480) boxY = 480;
@@ -383,11 +436,14 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
     doc.text(`Total Inventory Value: RM ${totalValue.toFixed(2)}`, 570, boxY + 28);
     doc.text(`Total Potential Revenue: RM ${totalRevenue.toFixed(2)}`, 570, boxY + 46);
 
+    // -------------------------------------------------
+    // FORCE RENDER COMPLETE
+    // -------------------------------------------------
     doc.flushPages();
 
-    // =====================================================
-    // FOOTER + PAGE NUMBER
-    // =====================================================
+    // -------------------------------------------------
+    // FOOTER + PAGE NUMBERS (SAFE)
+    // -------------------------------------------------
     const pages = doc.bufferedPageRange();
     for (let i = 0; i < pages.count; i++) {
       doc.switchToPage(i);
@@ -402,6 +458,7 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
       );
     }
 
+    // finalize PDF (this triggers the 'end' event where we save the buffer)
     doc.end();
 
   } catch (err) {
