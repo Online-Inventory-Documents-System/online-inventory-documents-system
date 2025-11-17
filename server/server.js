@@ -1,172 +1,232 @@
-// ============================================================================
-// server/server.js  — FULL UPDATED VERSION (Render Single-Service Compatible)
-// ============================================================================
+// server/server.js
+// MongoDB (Mongoose) based server for Online Inventory & Documents Management System
 
-const express = require("express");
-const cors = require("cors");
-const xlsx = require("xlsx");
-const mongoose = require("mongoose");
-const path = require("path");
-const fs = require("fs");
-const PDFDocument = require("pdfkit");
+const express = require('express');
+const cors = require('cors');
+const xlsx = require('xlsx');
+const mongoose = require('mongoose');
+const path = require('path');
+const PDFDocument = require('pdfkit');   // PDF generator
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MONGODB_URI = process.env.MONGODB_URI;
 const SECURITY_CODE = process.env.SECRET_SECURITY_CODE || "1234";
 
-// ============================================================================
-// MongoDB Connection
-// ============================================================================
+// ===== Middleware =====
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// ===== MongoDB Connection =====
 if (!MONGODB_URI) {
-  console.error("❌ ERROR: Missing MONGODB_URI in Render Environment");
+  console.error("MONGODB_URI is not set.");
   process.exit(1);
 }
 
 mongoose.set("strictQuery", false);
-mongoose
-  .connect(MONGODB_URI)
-  .then(() => console.log("✅ Connected to MongoDB Atlas"))
-  .catch((err) => {
-    console.error("❌ MongoDB ERROR:", err);
-    process.exit(1);
-  });
+mongoose.connect(MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+})
+.then(() => console.log("Connected to MongoDB Atlas"))
+.catch(err => {
+  console.error("MongoDB connect error:", err);
+  process.exit(1);
+});
 
 const { Schema } = mongoose;
 
-// ============================================================================
-// Schemas
-// ============================================================================
+// ===== Schemas =====
 const UserSchema = new Schema({
-  username: String,
-  password: String,
-  createdAt: { type: Date, default: Date.now },
+  username: { type: String, unique: true, required: true },
+  password: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now }
 });
 const User = mongoose.model("User", UserSchema);
+
+// Note: Document schema now stores binary `data` and `contentType`
+const DocumentSchema = new Schema({
+  name: String,
+  size: Number,
+  date: { type: Date, default: Date.now },
+  data: Buffer,            // file bytes
+  contentType: String      // e.g. "application/pdf"
+});
+const Doc = mongoose.model("Doc", DocumentSchema);
 
 const InventorySchema = new Schema({
   sku: String,
   name: String,
   category: String,
-  quantity: Number,
-  unitCost: Number,
-  unitPrice: Number,
-  createdAt: { type: Date, default: Date.now },
+  quantity: { type: Number, default: 0 },
+  unitCost: { type: Number, default: 0 },
+  unitPrice: { type: Number, default: 0 },
+  createdAt: { type: Date, default: Date.now }
 });
 const Inventory = mongoose.model("Inventory", InventorySchema);
-
-const DocumentSchema = new Schema({
-  name: String,
-  size: Number,
-  date: { type: Date, default: Date.now },
-});
-const Doc = mongoose.model("Doc", DocumentSchema);
 
 const LogSchema = new Schema({
   user: String,
   action: String,
-  time: { type: Date, default: Date.now },
+  time: { type: Date, default: Date.now }
 });
 const ActivityLog = mongoose.model("ActivityLog", LogSchema);
 
-// ============================================================================
-// Ensure report folder exists
-// ============================================================================
-const REPORT_DIR = path.join(__dirname, "generated_reports");
-
-if (!fs.existsSync(REPORT_DIR)) {
-  fs.mkdirSync(REPORT_DIR, { recursive: true });
-  console.log("📁 created:", REPORT_DIR);
-}
-
-// ============================================================================
-// Middleware
-// ============================================================================
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// ============================================================================
-// Log System (duplicate protection)
-// ============================================================================
-const DUP_WINDOW = 30_000;
+// ===== Duplicate Log Protection =====
+const DUPLICATE_WINDOW_MS = 30 * 1000;
 
 async function logActivity(user, action) {
-  const safeUser = user || "System";
-  const safeAction = action || "";
+  try {
+    const safeUser = (user || "Unknown").toString();
+    const safeAction = (action || "").toString();
+    const now = Date.now();
 
-  const last = await ActivityLog.findOne().sort({ time: -1 }).lean();
-  const now = Date.now();
+    const last = await ActivityLog.findOne({}).sort({ time: -1 }).lean().exec();
+    if (last) {
+      const lastUser = last.user || "Unknown";
+      const lastAction = last.action || "";
+      const lastTime = last.time ? new Date(last.time).getTime() : 0;
 
-  if (last) {
-    const tooSoon = now - new Date(last.time).getTime() <= DUP_WINDOW;
-    if (last.user === safeUser && last.action === safeAction && tooSoon) return;
+      if (
+        lastUser === safeUser &&
+        lastAction === safeAction &&
+        now - lastTime <= DUPLICATE_WINDOW_MS
+      ) {
+        return;
+      }
+    }
+
+    await ActivityLog.create({
+      user: safeUser,
+      action: safeAction,
+      time: new Date()
+    });
+
+  } catch (err) {
+    console.error("logActivity error:", err);
   }
-
-  await ActivityLog.create({ user: safeUser, action: safeAction });
 }
 
+// ===== Health Check =====
+app.get("/api/test", (req, res) => {
+  res.json({ success: true, message: "API is up", time: new Date().toISOString() });
+});
+
 // ============================================================================
-// AUTH
+//                               AUTH SYSTEM
 // ============================================================================
 app.post("/api/register", async (req, res) => {
-  const { username, password, securityCode } = req.body;
+  const { username, password, securityCode } = req.body || {};
 
   if (securityCode !== SECURITY_CODE)
     return res.status(403).json({ success: false, message: "Invalid security code" });
 
-  const exists = await User.findOne({ username });
-  if (exists) return res.status(409).json({ success: false, message: "User exists" });
+  if (!username || !password)
+    return res.status(400).json({ success: false, message: "Missing username or password" });
 
-  await User.create({ username, password });
-  await logActivity("System", `Registered new user ${username}`);
+  try {
+    const exists = await User.findOne({ username }).lean();
+    if (exists)
+      return res.status(409).json({ success: false, message: "Username already exists" });
 
-  res.json({ success: true });
+    await User.create({ username, password });
+    await logActivity("System", `Registered user: ${username}`);
+
+    res.json({ success: true, message: "Registration successful" });
+  } catch (err) {
+    console.error("register error", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
 });
 
 app.post("/api/login", async (req, res) => {
-  const { username, password } = req.body;
+  const { username, password } = req.body || {};
 
-  const user = await User.findOne({ username, password });
-  if (!user)
-    return res.status(401).json({ success: false, message: "Invalid login" });
+  if (!username || !password)
+    return res.status(400).json({ success: false, message: "Missing credentials" });
 
-  await logActivity(username, "Logged in");
-  res.json({ success: true, user: username });
+  try {
+    const user = await User.findOne({ username, password }).lean();
+    if (!user)
+      return res.status(401).json({ success: false, message: "Invalid credentials" });
+
+    await logActivity(username, "Logged in");
+    res.json({ success: true, user: username });
+  } catch (err) {
+    console.error("login error", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
 });
-
 // ============================================================================
-// INVENTORY CRUD
+//                                 INVENTORY CRUD
 // ============================================================================
 app.get("/api/inventory", async (req, res) => {
-  const items = await Inventory.find({}).lean();
-  res.json(items.map((i) => ({ ...i, id: i._id.toString() })));
+  try {
+    const items = await Inventory.find({}).lean();
+    const normalized = items.map(i => ({
+      ...i,
+      id: i._id.toString()
+    }));
+    res.json(normalized);
+  } catch (err) {
+    console.error("inventory get error", err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
 app.post("/api/inventory", async (req, res) => {
-  const item = await Inventory.create(req.body);
-  await logActivity(req.headers["x-username"], `Added: ${item.name}`);
-  res.json({ ...item.toObject(), id: item._id.toString() });
+  try {
+    const item = await Inventory.create(req.body);
+    await logActivity(req.headers["x-username"], `Added: ${item.name}`);
+
+    res.status(201).json({
+      ...item.toObject(),
+      id: item._id.toString()
+    });
+
+  } catch (err) {
+    console.error("inventory post error", err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
 app.put("/api/inventory/:id", async (req, res) => {
-  const item = await Inventory.findByIdAndUpdate(req.params.id, req.body, { new: true });
-  if (!item) return res.status(404).json({ message: "Not found" });
+  try {
+    const item = await Inventory.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (!item)
+      return res.status(404).json({ message: "Item not found" });
 
-  await logActivity(req.headers["x-username"], `Updated: ${item.name}`);
-  res.json({ ...item.toObject(), id: item._id.toString() });
+    await logActivity(req.headers["x-username"], `Updated: ${item.name}`);
+    res.json({
+      ...item.toObject(),
+      id: item._id.toString()
+    });
+
+  } catch (err) {
+    console.error("inventory update error", err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
 app.delete("/api/inventory/:id", async (req, res) => {
-  const item = await Inventory.findByIdAndDelete(req.params.id);
-  if (!item) return res.status(404).json({ message: "Not found" });
+  try {
+    const item = await Inventory.findByIdAndDelete(req.params.id);
+    if (!item)
+      return res.status(404).json({ message: "Item not found" });
 
-  await logActivity(req.headers["x-username"], `Deleted: ${item.name}`);
-  res.status(204).send();
+    await logActivity(req.headers["x-username"], `Deleted: ${item.name}`);
+    res.status(204).send();
+
+  } catch (err) {
+    console.error("inventory delete error", err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
-
-// PDF REPORT — SAVE TO DOCUMENTS + LOG USER ACTION
+// ============================================================================
+//                    PDF REPORT — SAVE PDF BYTES + LOG + STREAM
+// ============================================================================
 app.get("/api/inventory/report/pdf", async (req, res) => {
   try {
     const items = await Inventory.find({}).lean();
@@ -176,12 +236,12 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
     const reportId = `REP-${Date.now()}`;
     const printedBy = req.headers["x-username"] || "System";
 
+    // include ms timestamp so filename is unique
     const filename = `Inventory_Report_${now.toISOString().slice(0, 10)}_${Date.now()}.pdf`;
 
-    // ============================
-    // Prepare PDF buffer collector
-    // ============================
+    // collect chunks so we can save the PDF bytes after generation
     let pdfChunks = [];
+
     const doc = new PDFDocument({
       size: "A4",
       layout: "landscape",
@@ -189,33 +249,34 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
       bufferPages: true
     });
 
-    // Capture PDF buffer
+    // collect buffer chunks to save later
     doc.on("data", chunk => pdfChunks.push(chunk));
+
+    // when PDF finishes, save to Docs collection and log
     doc.on("end", async () => {
-      const pdfBuffer = Buffer.concat(pdfChunks);
-
-      // Save PDF record in Document database
-      await Doc.create({
-        name: filename,
-        size: pdfBuffer.length,
-        date: new Date()
-      });
-
-      // Log user action
-      await logActivity(
-        printedBy,
-        `Generated Inventory Report PDF: ${filename}`
-      );
+      try {
+        const pdfBuffer = Buffer.concat(pdfChunks);
+        await Doc.create({
+          name: filename,
+          size: pdfBuffer.length,
+          date: new Date(),
+          data: pdfBuffer,
+          contentType: "application/pdf"
+        });
+        await logActivity(printedBy, `Generated Inventory Report PDF: ${filename}`);
+      } catch (saveErr) {
+        console.error("Failed to save PDF to documents collection:", saveErr);
+      }
     });
 
-    // Also send PDF to user
+    // stream to response for immediate download
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.setHeader("Content-Type", "application/pdf");
     doc.pipe(res);
 
-    // =====================================================
-    // HEADER (Only shown on First Page)
-    // =====================================================
+    // -------------------------------------------------
+    // HEADER (Only first page)
+    // -------------------------------------------------
     doc.fontSize(22).font("Helvetica-Bold").text("L&B Company", 40, 40);
     doc.fontSize(10).font("Helvetica");
     doc.text("Jalan Mawar 8, Taman Bukit Beruang Permai, Melaka", 40, 70);
@@ -233,27 +294,50 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
 
     doc.moveTo(40, 130).lineTo(800, 130).stroke();
 
-    // =====================================================
+    // -------------------------------------------------
     // TABLE SETTINGS
-    // =====================================================
+    // -------------------------------------------------
     const rowHeight = 18;
+
     const colX = {
-      sku: 40, name: 100, category: 260, qty: 340,
-      cost: 400, price: 480, value: 560, revenue: 670
+      sku: 40,
+      name: 100,
+      category: 260,
+      qty: 340,
+      cost: 400,
+      price: 480,
+      value: 560,
+      revenue: 670
     };
+
     const width = {
-      sku: 60, name: 160, category: 80, qty: 60,
-      cost: 80, price: 80, value: 110, revenue: 120
+      sku: 60,
+      name: 160,
+      category: 80,
+      qty: 60,
+      cost: 80,
+      price: 80,
+      value: 110,
+      revenue: 120
     };
 
     let y = 150;
-    let rowsOnPage = 0;
 
+    // -------------------------------------------------
+    // DRAW TABLE HEADER
+    // -------------------------------------------------
     function drawHeader() {
       doc.font("Helvetica-Bold").fontSize(10);
-      for (const col of Object.keys(colX)) {
-        doc.rect(colX[col], y, width[col], rowHeight).stroke();
-      }
+
+      doc.rect(colX.sku, y, width.sku, rowHeight).stroke();
+      doc.rect(colX.name, y, width.name, rowHeight).stroke();
+      doc.rect(colX.category, y, width.category, rowHeight).stroke();
+      doc.rect(colX.qty, y, width.qty, rowHeight).stroke();
+      doc.rect(colX.cost, y, width.cost, rowHeight).stroke();
+      doc.rect(colX.price, y, width.price, rowHeight).stroke();
+      doc.rect(colX.value, y, width.value, rowHeight).stroke();
+      doc.rect(colX.revenue, y, width.revenue, rowHeight).stroke();
+
       doc.text("SKU", colX.sku + 3, y + 4);
       doc.text("Product Name", colX.name + 3, y + 4);
       doc.text("Category", colX.category + 3, y + 4);
@@ -264,17 +348,24 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
       doc.text("Total Potential Revenue", colX.revenue + 3, y + 4);
 
       y += rowHeight;
+
       doc.font("Helvetica").fontSize(9);
     }
 
     drawHeader();
+    // -------------------------------------------------
+    // ROW LOOP (MAX 10 ROWS PER PAGE)
+    // -------------------------------------------------
+    let subtotalQty = 0;
+    let totalValue = 0;
+    let totalRevenue = 0;
 
-    let subtotalQty = 0, totalValue = 0, totalRevenue = 0;
+    let rowCount = 0;
+    let rowsOnPage = 0;
 
-    // =====================================================
-    // TABLE ROWS — max 10 per page
-    // =====================================================
     for (const it of items) {
+
+      // Force page break if 10 rows on current page already
       if (rowsOnPage === 10) {
         doc.addPage({ size: "A4", layout: "landscape", margin: 40 });
         y = 40;
@@ -285,6 +376,7 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
       const qty = Number(it.quantity || 0);
       const cost = Number(it.unitCost || 0);
       const price = Number(it.unitPrice || 0);
+
       const val = qty * cost;
       const rev = qty * price;
 
@@ -292,10 +384,17 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
       totalValue += val;
       totalRevenue += rev;
 
-      for (const col of Object.keys(colX)) {
-        doc.rect(colX[col], y, width[col], rowHeight).stroke();
-      }
+      // Row borders
+      doc.rect(colX.sku, y, width.sku, rowHeight).stroke();
+      doc.rect(colX.name, y, width.name, rowHeight).stroke();
+      doc.rect(colX.category, y, width.category, rowHeight).stroke();
+      doc.rect(colX.qty, y, width.qty, rowHeight).stroke();
+      doc.rect(colX.cost, y, width.cost, rowHeight).stroke();
+      doc.rect(colX.price, y, width.price, rowHeight).stroke();
+      doc.rect(colX.value, y, width.value, rowHeight).stroke();
+      doc.rect(colX.revenue, y, width.revenue, rowHeight).stroke();
 
+      // Row text
       doc.text(it.sku || "", colX.sku + 3, y + 4);
       doc.text(it.name || "", colX.name + 3, y + 4);
       doc.text(it.category || "", colX.category + 3, y + 4);
@@ -307,13 +406,14 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
 
       y += rowHeight;
       rowsOnPage++;
+      rowCount++;
     }
 
-    // =====================================================
-    // TOTAL BOX (Last Page)
-    // =====================================================
-    const last = doc.bufferedPageRange().count - 1;
-    doc.switchToPage(last);
+    // -------------------------------------------------
+    // TOTALS BOX (LAST PAGE)
+    // -------------------------------------------------
+    const lastPageIndex = doc.bufferedPageRange().count - 1;
+    doc.switchToPage(lastPageIndex);
 
     let boxY = y + 20;
     if (boxY > 480) boxY = 480;
@@ -325,11 +425,14 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
     doc.text(`Total Inventory Value: RM ${totalValue.toFixed(2)}`, 570, boxY + 28);
     doc.text(`Total Potential Revenue: RM ${totalRevenue.toFixed(2)}`, 570, boxY + 46);
 
+    // -------------------------------------------------
+    // FORCE RENDER COMPLETE
+    // -------------------------------------------------
     doc.flushPages();
 
-    // =====================================================
-    // FOOTER + PAGE NUMBER
-    // =====================================================
+    // -------------------------------------------------
+    // FOOTER + PAGE NUMBERS (SAFE)
+    // -------------------------------------------------
     const pages = doc.bufferedPageRange();
     for (let i = 0; i < pages.count; i++) {
       doc.switchToPage(i);
@@ -344,6 +447,7 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
       );
     }
 
+    // finalize PDF (this triggers the 'end' event where we save the buffer)
     doc.end();
 
   } catch (err) {
@@ -353,122 +457,189 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
 });
 
 // ============================================================================
-// XLSX REPORT
+//                               DOCUMENTS DOWNLOAD (SERVE SAVED BYTES)
 // ============================================================================
-app.get("/api/inventory/report", async (req, res) => {
+app.get("/api/documents/download/:filename", async (req, res) => {
   try {
-    const items = await Inventory.find({}).lean();
+    const filename = req.params.filename || "";
+    const docRecord = await Doc.findOne({ name: filename }).exec();
+    if (!docRecord) {
+      // fallback for older xlsx reports
+      if (filename.startsWith("Inventory_Report") && filename.endsWith(".xlsx")) {
+        return res.redirect("/api/inventory/report");
+      }
+      return res.status(404).json({ message: "Document not found" });
+    }
 
-    const filename = `Inventory_Report_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    if (docRecord.data && docRecord.data.length) {
+      res.setHeader("Content-Disposition", `attachment; filename="${docRecord.name}"`);
+      res.setHeader("Content-Type", docRecord.contentType || "application/octet-stream");
+      return res.send(docRecord.data);
+    }
 
-    const ws_data = [
-      ["Inventory Report"],
-      ["Generated On", new Date().toLocaleString()],
-      [],
-      [
-        "SKU",
-        "Name",
-        "Category",
-        "Quantity",
-        "Unit Cost",
-        "Unit Price",
-        "Total Value",
-      ],
-    ];
+    // If no binary saved, fallback to re-generate (optional)
+    if (docRecord.name.startsWith("Inventory_Report") && docRecord.name.endsWith(".pdf")) {
+      return res.redirect("/api/inventory/report/pdf");
+    }
 
-    items.forEach((it) => {
-      const qty = Number(it.quantity);
-      const cost = Number(it.unitCost);
-      const price = Number(it.unitPrice);
+    return res.status(404).json({ message: "Document has no file data. Regenerate the file." });
 
-      ws_data.push([
-        it.sku,
-        it.name,
-        it.category,
-        qty,
-        cost.toFixed(2),
-        price.toFixed(2),
-        (qty * cost).toFixed(2),
-      ]);
-    });
-
-    const ws = xlsx.utils.aoa_to_sheet(ws_data);
-    const wb = xlsx.utils.book_new();
-    xlsx.utils.book_append_sheet(wb, ws, "Report");
-
-    const buffer = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
-
-    // Save to DB
-    await Doc.create({
-      name: filename,
-      size: buffer.length,
-      date: new Date(),
-    });
-
-    // Log
-    await logActivity(req.headers["x-username"], `Generated XLSX Report`);
-
-    // Send file
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.send(buffer);
   } catch (err) {
-    console.error("XLSX Error:", err);
-    res.status(500).json({ message: "XLSX generation failed" });
+    console.error("download error", err);
+    return res.status(500).json({ message: "Server error while downloading document" });
   }
 });
 
 // ============================================================================
-// DOCUMENTS
+//                                   XLSX REPORT
+// (unchanged behavior; still saves metadata in documents collection for xlsx route if desired)
+// ============================================================================
+app.get("/api/inventory/report", async (req, res) => {
+  try {
+    const items = await Inventory.find({}).lean();
+    const filenameBase = `Inventory_Report_${new Date().toISOString().slice(0, 10)}`;
+    const filename = `${filenameBase}.xlsx`;
+
+    const ws_data = [
+      ["L&B Company - Inventory Report"],
+      ["Date:", new Date().toISOString().slice(0, 10)],
+      [],
+      ["SKU", "Name", "Category", "Quantity", "Unit Cost", "Unit Price", "Total Inventory Value", "Total Potential Revenue"]
+    ];
+
+    let totalValue = 0;
+    let totalRevenue = 0;
+
+    items.forEach(it => {
+      const qty = Number(it.quantity || 0);
+      const uc = Number(it.unitCost || 0);
+      const up = Number(it.unitPrice || 0);
+      const invVal = qty * uc;
+      const rev = qty * up;
+
+      totalValue += invVal;
+      totalRevenue += rev;
+
+      ws_data.push([
+        it.sku || "",
+        it.name || "",
+        it.category || "",
+        qty,
+        uc.toFixed(2),
+        up.toFixed(2),
+        invVal.toFixed(2),
+        rev.toFixed(2)
+      ]);
+    });
+
+    ws_data.push([]);
+    ws_data.push(["", "", "", "Totals", "", "", totalValue.toFixed(2), totalRevenue.toFixed(2)]);
+
+    const ws = xlsx.utils.aoa_to_sheet(ws_data);
+    const wb = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(wb, ws, "Inventory Report");
+    const wb_out = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    // persist XLSX metadata (we keep older behavior of storing metadata-only doc record)
+    await Doc.create({ name: filename, size: wb_out.length, date: new Date(), contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    await logActivity(req.headers["x-username"], `Generated Inventory Report XLSX`);
+
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    return res.send(wb_out);
+
+  } catch (err) {
+    console.error("XLSX error", err);
+    return res.status(500).json({ message: "Report generation failed" });
+  }
+});
+
+// ============================================================================
+//                                   DOCUMENTS CRUD (LIST / UPLOAD / DELETE)
 // ============================================================================
 app.get("/api/documents", async (req, res) => {
-  const docs = await Doc.find({}).sort({ date: -1 }).lean();
-  res.json(docs.map((d) => ({ ...d, id: d._id.toString() })));
+  try {
+    const docs = await Doc.find({}).sort({ date: -1 }).lean();
+    const normalized = docs.map(d => ({ ...d, id: d._id.toString(), sizeBytes: d.size || 0 }));
+    res.json(normalized);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
-// Download saved PDFs
-app.get("/api/documents/download/:name", (req, res) => {
-  const name = req.params.name;
-  const filePath = path.join(REPORT_DIR, name);
-
-  if (!fs.existsSync(filePath))
-    return res.status(404).json({ message: "File not found" });
-
-  res.download(filePath);
+app.post("/api/documents", async (req, res) => {
+  try {
+    const docu = await Doc.create({ ...req.body, date: new Date() });
+    await logActivity(req.headers["x-username"], `Uploaded document: ${docu.name}`);
+    res.status(201).json({ ...docu.toObject(), id: docu._id.toString() });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
-// Delete metadata
 app.delete("/api/documents/:id", async (req, res) => {
-  await Doc.findByIdAndDelete(req.params.id);
-  res.status(204).send();
+  try {
+    const docu = await Doc.findByIdAndDelete(req.params.id);
+    if (!docu) return res.status(404).json({ message: "Document not found" });
+
+    await logActivity(req.headers["x-username"], `Deleted document: ${docu.name}`);
+    res.status(204).send();
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
 // ============================================================================
-// ACTIVITY LOGS
+//                                   ACTIVITY LOGS
 // ============================================================================
 app.get("/api/logs", async (req, res) => {
-  const logs = await ActivityLog.find().sort({ time: -1 }).limit(500).lean();
-  res.json(
-    logs.map((l) => ({
+  try {
+    const logs = await ActivityLog.find({}).sort({ time: -1 }).limit(500).lean();
+    res.json(logs.map(l => ({
       user: l.user,
       action: l.action,
-      time: l.time,
-    }))
-  );
+      time: l.time ? new Date(l.time).toISOString() : new Date().toISOString()
+    })));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
 // ============================================================================
-// STATIC FRONTEND SERVE
+//                              SERVE FRONTEND
 // ============================================================================
 app.use(express.static(path.join(__dirname, "../public")));
 
 app.get("*", (req, res) => {
+  if (req.path.startsWith("/api/"))
+    return res.status(404).json({ message: "API route not found" });
+
   res.sendFile(path.join(__dirname, "../public/index.html"));
 });
 
 // ============================================================================
-// START SERVER
+//                        STARTUP HELPER + START SERVER
 // ============================================================================
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
+async function ensureDefaultAdminAndStartupLog() {
+  try {
+    const count = await User.countDocuments({}).exec();
+    if (count === 0) {
+      await User.create({ username: "admin", password: "password" });
+      await logActivity("System", "Default admin user created");
+    }
+    await logActivity("System", `Server started on port ${PORT}`);
+  } catch (err) {
+    console.error("Startup error:", err);
+  }
+}
+
+(async () => {
+  await ensureDefaultAdminAndStartupLog();
+  console.log("Starting server...");
+  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+})();
