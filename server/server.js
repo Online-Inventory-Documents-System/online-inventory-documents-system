@@ -56,10 +56,13 @@ const InventorySchema = new Schema({
 });
 const Inventory = mongoose.model("Inventory", InventorySchema);
 
+// FIX: Added data and contentType fields to store file content for server-generated reports
 const DocumentSchema = new Schema({
   name: String,
   size: Number,
-  date: { type: Date, default: Date.now }
+  date: { type: Date, default: Date.now },
+  data: Buffer,
+  contentType: String
 });
 const Doc = mongoose.model("Doc", DocumentSchema);
 
@@ -515,8 +518,16 @@ app.get("/api/inventory/report", async (req, res) => {
     const wb = xlsx.utils.book_new();
     xlsx.utils.book_append_sheet(wb, ws, "Inventory Report");
     const wb_out = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
-
-    await Doc.create({ name: filename, size: wb_out.length, date: new Date() });
+    
+    // FIX: Included data and contentType for XLSX reports as well
+    await Doc.create({ 
+      name: filename, 
+      size: wb_out.length, 
+      date: new Date(),
+      data: wb_out,
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    });
+    
     await logActivity(req.headers["x-username"], `Generated Inventory Report XLSX`);
 
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
@@ -534,7 +545,8 @@ app.get("/api/inventory/report", async (req, res) => {
 // ============================================================================
 app.get("/api/documents", async (req, res) => {
   try {
-    const docs = await Doc.find({}).sort({ date: -1 }).lean();
+    // Only fetch necessary metadata fields for listing (no bulky 'data' field)
+    const docs = await Doc.find({}).select('-data').sort({ date: -1 }).lean();
     res.json(docs.map(d => ({ ...d, id: d._id.toString() })));
   } catch (err) {
     console.error(err);
@@ -543,6 +555,8 @@ app.get("/api/documents", async (req, res) => {
 });
 
 app.post("/api/documents", async (req, res) => {
+  // NOTE: This route only saves metadata for simulated uploads. 
+  // Actual file content is NOT saved here.
   try {
     const docu = await Doc.create({ ...req.body, date: new Date() });
     await logActivity(req.headers["x-username"], `Uploaded document: ${docu.name}`);
@@ -566,6 +580,39 @@ app.delete("/api/documents/:id", async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
+
+// ============================================================================
+//                                DOCUMENTS DOWNLOAD
+// ============================================================================
+app.get("/api/documents/download/:id", async (req, res) => {
+  try {
+    const docu = await Doc.findById(req.params.id);
+    if (!docu) return res.status(404).json({ message: "Document not found" });
+
+    // Check if the document has the 'data' field (which stores the file buffer)
+    if (!docu.data || !docu.contentType) {
+      // This is the expected behavior for simulated user uploads (POST /api/documents)
+      return res.status(400).json({ 
+        message: "File content not stored on server. Only server-generated reports (PDF/XLSX) can be downloaded." 
+      });
+    }
+
+    // Set headers for download
+    res.setHeader("Content-Disposition", `attachment; filename="${docu.name}"`);
+    res.setHeader("Content-Type", docu.contentType);
+    res.setHeader("Content-Length", docu.size);
+    
+    // Send the file data buffer
+    res.send(docu.data);
+
+    await logActivity(req.headers["x-username"], `Downloaded document: ${docu.name}`);
+
+  } catch (err) {
+    console.error("Document download error:", err);
+    res.status(500).json({ message: "Server error during download" });
+  }
+});
+
 
 // ============================================================================
 //                               ACTIVITY LOGS
