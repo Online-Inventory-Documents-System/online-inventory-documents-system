@@ -1,296 +1,541 @@
 // public/js/script.js
-// Complete, FIXED, UPDATED client script for Online Inventory & Document System
+// Full restored, fixed, and feature-complete client script
+// Works with: /api/* endpoints in your server.js
 
-// ------------------------------ API BASE (FIXED FOR RENDER) ------------------------------
-const API_BASE = window.location.hostname.includes("localhost")
+// ------------------------------ API BASE (auto-detect) ------------------------------
+const API_BASE = window.location.hostname.includes('localhost')
   ? "http://localhost:3000/api"
-  : "https://online-inventory-documents-system-olzt.onrender.com/api"; // ✔ Correct for single Render service
+  : "https://online-inventory-documents-system-olzt.onrender.com/api";
 
-// Utilities
+// ------------------------------ Utilities ------------------------------
 const qs = (s) => document.querySelector(s);
-const escapeHtml = (s) =>
-  s
-    ? String(s).replace(/[&<>"']/g, (c) =>
-        ({
-          "&": "&amp;",
-          "<": "&lt;",
-          ">": "&gt;",
-          '"': "&quot;",
-          "'": "&#39;",
-        }[c])
-      )
-    : "";
+const qsa = (s) => Array.from(document.querySelectorAll(s));
+const escapeHtml = (s) => s ? String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])) : '';
+const showMsg = (el, text, color = 'red') => { if (!el) return; el.textContent = text; el.style.color = color; };
 
-const getUsername = () => sessionStorage.getItem("adminName") || "Guest";
+const getUsername = () => sessionStorage.getItem('adminName') || 'Guest';
+const isLoggedIn = () => sessionStorage.getItem('isLoggedIn') === 'true';
 
 let inventory = [];
 let documents = [];
 let activityLog = [];
+const currentPage = window.location.pathname.split('/').pop();
 
-const currentPage = window.location.pathname.split("/").pop();
-
-// ------------------------------ UNIVERSAL FETCH WRAPPER ------------------------------
+// ------------------------------ Fetch wrapper (adds X-Username) ------------------------------
 async function apiFetch(url, options = {}) {
+  const user = getUsername();
   options.headers = {
-    "Content-Type": "application/json",
-    "X-Username": getUsername(),
-    ...options.headers,
+    'Content-Type': 'application/json',
+    'X-Username': user,
+    ...options.headers
   };
   return fetch(url, options);
 }
 
-// ------------------------------ LOGIN REDIRECT ------------------------------
-if (
-  !sessionStorage.getItem("isLoggedIn") &&
-  !window.location.pathname.includes("login.html")
-) {
-  window.location.href = "login.html";
+// ------------------------------ Auth redirect (don't redirect on login/register) ------------------------------
+if (!isLoggedIn() && !window.location.pathname.includes('login.html') && !window.location.pathname.includes('register.html')) {
+  // redirect to login
+  try { window.location.href = 'login.html'; } catch (e) {}
 }
 
-// ------------------------------ LOGOUT ------------------------------
-function logout() {
-  sessionStorage.clear();
-  window.location.href = "login.html";
+// ------------------------------ Auth functions ------------------------------
+async function login(){
+  const user = qs('#username')?.value?.trim();
+  const pass = qs('#password')?.value?.trim();
+  const msg = qs('#loginMessage');
+  showMsg(msg, '');
+  if(!user || !pass) { showMsg(msg, '⚠️ Please enter username and password.', 'red'); return; }
+
+  try {
+    const res = await apiFetch(`${API_BASE}/login`, { method: 'POST', body: JSON.stringify({ username: user, password: pass }) });
+    const data = await res.json();
+    if(res.ok) {
+      sessionStorage.setItem('isLoggedIn', 'true');
+      sessionStorage.setItem('adminName', user);
+      showMsg(msg, '✅ Login successful! Redirecting...', 'green');
+      setTimeout(()=> window.location.href = 'index.html', 700);
+    } else {
+      showMsg(msg, `❌ ${data.message || 'Login failed.'}`, 'red');
+    }
+  } catch (e) {
+    showMsg(msg, '❌ Server connection failed.', 'red');
+    console.error('login error', e);
+  }
 }
 
-// ------------------------------ DARK MODE ------------------------------
-function toggleTheme() {
-  document.body.classList.toggle("dark-mode");
-  localStorage.setItem(
-    "theme",
-    document.body.classList.contains("dark-mode") ? "dark" : "light"
-  );
+async function register(){
+  const user = qs('#newUsername')?.value?.trim();
+  const pass = qs('#newPassword')?.value?.trim();
+  const code = qs('#securityCode')?.value?.trim();
+  const msg = qs('#registerMessage');
+  showMsg(msg, '');
+  if(!user || !pass || !code) { showMsg(msg, '⚠️ Please fill in all fields.', 'red'); return; }
+
+  try {
+    const res = await apiFetch(`${API_BASE}/register`, { method: 'POST', body: JSON.stringify({ username: user, password: pass, securityCode: code }) });
+    const data = await res.json();
+    if(res.ok) {
+      showMsg(msg, '✅ Registered successfully! You can now log in.', 'green');
+      setTimeout(()=> window.location.href = 'login.html', 900);
+    } else {
+      showMsg(msg, `❌ ${data.message || 'Registration failed.'}`, 'red');
+    }
+  } catch (e) {
+    showMsg(msg, '❌ Server connection failed.', 'red');
+    console.error('register error', e);
+  }
 }
 
-// ------------------------------ RENDER INVENTORY ------------------------------
+function logout(){
+  sessionStorage.removeItem('isLoggedIn');
+  sessionStorage.removeItem('adminName');
+  window.location.href = 'login.html';
+}
+
+// ------------------------------ Theme ------------------------------
+function toggleTheme(){
+  document.body.classList.toggle('dark-mode');
+  try { localStorage.setItem('theme', document.body.classList.contains('dark-mode') ? 'dark' : 'light'); } catch(e){}
+}
+
+// ------------------------------ Renderers ------------------------------
 function renderInventory(items) {
-  const list = qs("#inventoryList");
-  if (!list) return;
+  const list = qs('#inventoryList');
+  if(!list) return;
+  list.innerHTML = '';
 
-  list.innerHTML = "";
+  let totalValue = 0, totalRevenue = 0, totalStock = 0;
 
-  let tValue = 0,
-    tRevenue = 0,
-    tStock = 0;
-
-  items.forEach((it) => {
+  items.forEach(it => {
+    const id = it.id || it._id;
     const qty = Number(it.quantity || 0);
     const uc = Number(it.unitCost || 0);
     const up = Number(it.unitPrice || 0);
     const invVal = qty * uc;
     const rev = qty * up;
 
-    tValue += invVal;
-    tRevenue += rev;
-    tStock += qty;
+    totalValue += invVal;
+    totalRevenue += rev;
+    totalStock += qty;
 
-    const tr = document.createElement("tr");
-    if (qty === 0) tr.classList.add("out-of-stock-row");
-    else if (qty < 10) tr.classList.add("low-stock-row");
+    const tr = document.createElement('tr');
+    if(qty === 0) tr.classList.add('out-of-stock-row');
+    else if(qty < 10) tr.classList.add('low-stock-row');
 
     tr.innerHTML = `
-      <td>${escapeHtml(it.sku)}</td>
-      <td>${escapeHtml(it.name)}</td>
-      <td>${escapeHtml(it.category)}</td>
+      <td>${escapeHtml(it.sku||'')}</td>
+      <td>${escapeHtml(it.name||'')}</td>
+      <td>${escapeHtml(it.category||'')}</td>
       <td>${qty}</td>
       <td class="money">RM ${uc.toFixed(2)}</td>
       <td class="money">RM ${up.toFixed(2)}</td>
       <td class="money">RM ${invVal.toFixed(2)}</td>
       <td class="actions">
-        <button class="primary-btn small-btn" onclick="openEditPageForItem('${it.id}')">✏️ Edit</button>
-        <button class="danger-btn small-btn" onclick="confirmAndDeleteItem('${it.id}')">🗑️ Delete</button>
+        <button class="primary-btn small-btn" onclick="openEditPageForItem('${id}')">✏️ Edit</button>
+        <button class="danger-btn small-btn" onclick="confirmAndDeleteItem('${id}')">🗑️ Delete</button>
       </td>
     `;
     list.appendChild(tr);
   });
 
-  qs("#totalValue") && (qs("#totalValue").textContent = tValue.toFixed(2));
-  qs("#totalRevenue") && (qs("#totalRevenue").textContent = tRevenue.toFixed(2));
-  qs("#totalStock") && (qs("#totalStock").textContent = tStock);
+  if(qs('#totalValue')) qs('#totalValue').textContent = totalValue.toFixed(2);
+  if(qs('#totalRevenue')) qs('#totalRevenue').textContent = totalRevenue.toFixed(2);
+  if(qs('#totalStock')) qs('#totalStock').textContent = totalStock;
 }
 
-// ------------------------------ RENDER DOCUMENTS ------------------------------
 function renderDocuments(docs) {
-  const list = qs("#docList");
-  if (!list) return;
+  const list = qs('#docList');
+  if(!list) return;
+  list.innerHTML = '';
 
-  list.innerHTML = "";
-
-  docs.forEach((d) => {
-    const sizeMB = ((d.size || 0) / (1024 * 1024)).toFixed(2);
-
-    const tr = document.createElement("tr");
+  docs.forEach(d => {
+    const id = d.id || d._id;
+    const sizeMB = ((d.sizeBytes || d.size || 0) / (1024*1024)).toFixed(2);
+    const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${escapeHtml(d.name)}</td>
+      <td>${escapeHtml(d.name||'')}</td>
       <td>${sizeMB} MB</td>
       <td>${new Date(d.date).toLocaleString()}</td>
       <td class="actions">
-        <button class="primary-btn small-btn" onclick="downloadDocument('${d.name}')">⬇️ Download</button>
-        <button class="danger-btn small-btn" onclick="deleteDocumentConfirm('${d.id}')">🗑️ Delete</button>
+        <button class="primary-btn small-btn" onclick="downloadDocument('${encodeURIComponent(d.name||'')}')">⬇️ Download</button>
+        <button class="danger-btn small-btn" onclick="deleteDocumentConfirm('${id}')">🗑️ Delete</button>
       </td>
     `;
     list.appendChild(tr);
   });
 }
 
-// ------------------------------ RENDER LOGS ------------------------------
 function renderLogs() {
-  const table = qs("#logList");
-  if (!table) return;
-
-  table.innerHTML = "";
-
-  activityLog.forEach((log) => {
-    const tr = document.createElement("tr");
-
-    tr.innerHTML = `
-      <td>${escapeHtml(log.user)}</td>
-      <td>${escapeHtml(log.action)}</td>
-      <td>${new Date(log.time).toLocaleString()}</td>
-    `;
-
-    table.appendChild(tr);
-  });
+  const list = qs('#logList');
+  if(list) {
+    list.innerHTML = '';
+    activityLog.forEach(l => {
+      const tr = document.createElement('tr');
+      const timeStr = l.time ? new Date(l.time).toLocaleString() : new Date().toLocaleString();
+      tr.innerHTML = `<td>${escapeHtml(l.user||'System')}</td><td>${escapeHtml(l.action||'')}</td><td>${escapeHtml(timeStr)}</td>`;
+      list.appendChild(tr);
+    });
+  }
+  renderDashboardData();
 }
 
-// ------------------------------ FETCH INVENTORY ------------------------------
+function renderDashboardData(){
+  const tbody = qs('#recentActivities');
+  if(tbody) {
+    tbody.innerHTML = '';
+    activityLog.slice(0,5).forEach(l => {
+      const timeStr = l.time ? new Date(l.time).toLocaleString() : new Date().toLocaleString();
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${escapeHtml(l.user||'Admin')}</td><td>${escapeHtml(l.action)}</td><td>${escapeHtml(timeStr)}</td>`;
+      tbody.appendChild(tr);
+    });
+  }
+
+  if(qs('#dash_totalItems')) {
+    let totalValue = 0, totalRevenue = 0, totalStock = 0;
+    inventory.forEach(it => {
+      const qty = Number(it.quantity || 0);
+      totalValue += qty * Number(it.unitCost || 0);
+      totalRevenue += qty * Number(it.unitPrice || 0);
+      totalStock += qty;
+    });
+    qs('#dash_totalItems').textContent = inventory.length;
+    qs('#dash_totalValue').textContent = totalValue.toFixed(2);
+    qs('#dash_totalRevenue').textContent = totalRevenue.toFixed(2);
+    qs('#dash_totalStock').textContent = totalStock;
+  }
+}
+
+// ------------------------------ Fetchers ------------------------------
 async function fetchInventory() {
-  const res = await apiFetch(`${API_BASE}/inventory`);
-  const data = await res.json();
-  inventory = data.map((i) => ({ ...i, id: i.id || i._id }));
-  renderInventory(inventory);
+  try {
+    const res = await apiFetch(`${API_BASE}/inventory`);
+    if(!res.ok) throw new Error('Failed to fetch inventory');
+    const data = await res.json();
+    inventory = data.map(i => ({ ...i, id: i.id || i._id }));
+    renderInventory(inventory);
+  } catch (err) { console.error('fetchInventory', err); }
 }
 
-// ------------------------------ FETCH DOCUMENTS ------------------------------
 async function fetchDocuments() {
-  const res = await apiFetch(`${API_BASE}/documents`);
-  const data = await res.json();
-  documents = data.map((d) => ({ ...d, id: d.id || d._id }));
-  renderDocuments(documents);
+  try {
+    const res = await apiFetch(`${API_BASE}/documents`);
+    if(!res.ok) throw new Error('Failed to fetch documents');
+    const data = await res.json();
+    documents = data.map(d => ({ ...d, id: d.id || d._id }));
+    renderDocuments(documents);
+  } catch (err) { console.error('fetchDocuments', err); }
 }
 
-// ------------------------------ FETCH LOGS ------------------------------
 async function fetchLogs() {
-  const res = await apiFetch(`${API_BASE}/logs`);
-  activityLog = await res.json();
-  renderLogs();
+  try {
+    const res = await apiFetch(`${API_BASE}/logs`);
+    if(!res.ok) throw new Error('Failed to fetch logs');
+    activityLog = await res.json();
+    renderLogs();
+  } catch (err) { console.error('fetchLogs', err); }
 }
 
-// ------------------------------ INVENTORY ADD ------------------------------
-async function confirmAndAddProduct() {
-  const sku = qs("#p_sku").value.trim();
-  const name = qs("#p_name").value.trim();
-  const category = qs("#p_category").value.trim();
-  const quantity = Number(qs("#p_quantity").value || 0);
-  const unitCost = Number(qs("#p_unitCost").value || 0);
-  const unitPrice = Number(qs("#p_unitPrice").value || 0);
+// ------------------------------ Inventory CRUD ------------------------------
+async function confirmAndAddProduct(){
+  const sku = qs('#p_sku')?.value?.trim();
+  const name = qs('#p_name')?.value?.trim();
+  const category = qs('#p_category')?.value?.trim();
+  const quantity = Number(qs('#p_quantity')?.value || 0);
+  const unitCost = Number(qs('#p_unitCost')?.value || 0);
+  const unitPrice = Number(qs('#p_unitPrice')?.value || 0);
+  if(!sku || !name) return alert('⚠️ Please enter SKU and Name.');
+  if(!confirm(`Confirm Add Product: ${name} (${sku})?`)) return;
 
-  if (!sku || !name) return alert("Please enter SKU and Name.");
+  const newItem = { sku, name, category, quantity, unitCost, unitPrice };
+  try {
+    const res = await apiFetch(`${API_BASE}/inventory`, { method: 'POST', body: JSON.stringify(newItem) });
+    if(res.ok) {
+      ['#p_sku','#p_name','#p_category','#p_quantity','#p_unitCost','#p_unitPrice'].forEach(id => { if(qs(id)) qs(id).value = ''; });
+      await fetchInventory();
+      await fetchLogs();
+      alert('✅ Product added successfully.');
+    } else {
+      alert('❌ Failed to add product.');
+    }
+  } catch(e) { console.error(e); alert('❌ Server connection error while adding product.'); }
+}
 
-  const body = { sku, name, category, quantity, unitCost, unitPrice };
+async function confirmAndDeleteItem(id){
+  const it = inventory.find(x => String(x.id) === String(id));
+  if(!it) return;
+  if(!confirm(`Confirm Delete: "${it.name}"?`)) return;
+  try {
+    const res = await apiFetch(`${API_BASE}/inventory/${id}`, { method: 'DELETE' });
+    if(res.status === 204) {
+      await fetchInventory();
+      await fetchLogs();
+      alert('🗑️ Item deleted!');
+    } else {
+      alert('❌ Failed to delete item.');
+    }
+  } catch(e) { console.error(e); alert('❌ Server connection error while deleting product.'); }
+}
 
-  await apiFetch(`${API_BASE}/inventory`, {
-    method: "POST",
-    body: JSON.stringify(body),
+// ------------------------------ Product edit page ------------------------------
+async function bindProductPage(){
+  const params = new URLSearchParams(window.location.search);
+  const id = params.get('id');
+  if(id) {
+    try {
+      const res = await apiFetch(`${API_BASE}/inventory`);
+      const items = await res.json();
+      const it = items.find(x => String(x.id) === String(id) || String(x._id) === String(id));
+      if(!it) { alert('Item not found'); return; }
+      if(qs('#prod_id')) qs('#prod_id').value = it.id || it._id;
+      if(qs('#prod_sku')) qs('#prod_sku').value = it.sku || '';
+      if(qs('#prod_name')) qs('#prod_name').value = it.name || '';
+      if(qs('#prod_category')) qs('#prod_category').value = it.category || '';
+      if(qs('#prod_quantity')) qs('#prod_quantity').value = it.quantity || 0;
+      if(qs('#prod_unitCost')) qs('#prod_unitCost').value = it.unitCost || 0;
+      if(qs('#prod_unitPrice')) qs('#prod_unitPrice').value = it.unitPrice || 0;
+    } catch(e) { console.error('bindProductPage', e); alert('Failed to load product details.'); return; }
+  }
+
+  qs('#saveProductBtn')?.addEventListener('click', async ()=> {
+    if(!confirm('Confirm: Save Changes?')) return;
+    const idVal = qs('#prod_id')?.value;
+    const body = {
+      sku: qs('#prod_sku')?.value,
+      name: qs('#prod_name')?.value,
+      category: qs('#prod_category')?.value,
+      quantity: Number(qs('#prod_quantity')?.value || 0),
+      unitCost: Number(qs('#prod_unitCost')?.value || 0),
+      unitPrice: Number(qs('#prod_unitPrice')?.value || 0)
+    };
+    try {
+      const res = await apiFetch(`${API_BASE}/inventory/${idVal}`, { method: 'PUT', body: JSON.stringify(body) });
+      if(res.ok) { await fetchInventory(); await fetchLogs(); alert('✅ Item updated'); window.location.href = 'inventory.html'; }
+      else { const err = await res.json(); alert('❌ Failed to update item: ' + (err.message || 'Unknown')); }
+    } catch(e) { console.error(e); alert('❌ Server connection error during update.'); }
   });
 
-  await fetchInventory();
-  alert("Product added!");
+  qs('#cancelProductBtn')?.addEventListener('click', ()=> window.location.href = 'inventory.html');
 }
 
-// ------------------------------ DELETE INVENTORY ------------------------------
-async function confirmAndDeleteItem(id) {
-  if (!confirm("Delete this item?")) return;
-
-  await apiFetch(`${API_BASE}/inventory/${id}`, { method: "DELETE" });
-
-  await fetchInventory();
-  alert("Item deleted!");
-}
-
-// ------------------------------ PDF REPORT ------------------------------
-async function confirmAndGeneratePDF() {
-  if (!confirm("Generate PDF Report?")) return;
-
-  const res = await apiFetch(`${API_BASE}/inventory/report/pdf`);
-  const blob = await res.blob();
-
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "Inventory_Report.pdf";
-  a.click();
-}
-
-// ------------------------------ XLSX REPORT ------------------------------
+// ------------------------------ XLSX + PDF Report ------------------------------
 async function confirmAndGenerateReport() {
-  if (!confirm("Generate Excel Report?")) return;
-
-  const res = await apiFetch(`${API_BASE}/inventory/report`);
-  const blob = await res.blob();
-
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "Inventory_Report.xlsx";
-  a.click();
-}
-
-// ------------------------------ DOWNLOAD DOCUMENT ------------------------------
-function downloadDocument(fileName) {
-  if (!confirm(`Download ${fileName}?`)) return;
-
-  const url = `${API_BASE}/documents/download/${encodeURIComponent(fileName)}`;
-  window.open(url, "_blank");
-}
-
-// ------------------------------ DELETE DOCUMENT ------------------------------
-async function deleteDocumentConfirm(id) {
-  if (!confirm("Delete document metadata?")) return;
-
-  await apiFetch(`${API_BASE}/documents/${id}`, { method: "DELETE" });
-
-  await fetchDocuments();
-}
-
-// ------------------------------ SEARCH DOCUMENTS ------------------------------
-function searchDocuments() {
-  const q = qs("#searchDocs").value.toLowerCase();
-  const filtered = documents.filter(
-    (d) =>
-      d.name.toLowerCase().includes(q) ||
-      new Date(d.date).toLocaleString().toLowerCase().includes(q)
-  );
-  renderDocuments(filtered);
-}
-
-// ------------------------------ INIT PAGE ------------------------------
-window.addEventListener("load", async () => {
-  const theme = localStorage.getItem("theme");
-  if (theme === "dark") document.body.classList.add("dark-mode");
-
-  if (currentPage.includes("inventory")) {
-    await fetchInventory();
-    qs("#addProductBtn")?.addEventListener("click", confirmAndAddProduct);
-    qs("#reportBtn")?.addEventListener("click", confirmAndGenerateReport);
-    qs("#pdfReportBtn")?.addEventListener("click", confirmAndGeneratePDF);
+  if(!confirm('Confirm Generate Report: This will create and save a new Excel file.')) return;
+  try {
+    const res = await apiFetch(`${API_BASE}/inventory/report`, { method: 'GET' });
+    if(res.ok) {
+      const blob = await res.blob();
+      const contentDisposition = res.headers.get('Content-Disposition');
+      const filenameMatch = contentDisposition ? contentDisposition.match(/filename="(.+?)"/) : null;
+      const filename = filenameMatch ? filenameMatch[1] : `Inventory_Report_${Date.now()}.xlsx`;
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      a.remove();
+      await fetchDocuments();
+      await fetchLogs();
+      alert(`Report "${filename}" successfully generated and saved to Documents!`);
+    } else {
+      const error = await res.json();
+      alert(`Failed to generate report: ${error.message}`);
+    }
+  } catch(e) {
+    console.error('Report generation error:', e);
+    alert('An error occurred during report generation. Check console for details.');
   }
+}
 
-  if (currentPage.includes("documents")) {
+async function confirmAndGeneratePDF() {
+  if(!confirm("Generate PDF Inventory Report?")) return;
+  try {
+    const res = await apiFetch(`${API_BASE}/inventory/report/pdf`, { method: 'GET' });
+    if(!res.ok) {
+      try { const err = await res.json(); alert(`Failed to generate PDF: ${err.message || 'Server error'}`); }
+      catch(_) { alert("Failed to generate PDF."); }
+      return;
+    }
+    const blob = await res.blob();
+    const contentDisposition = res.headers.get('Content-Disposition');
+    const filenameMatch = contentDisposition ? contentDisposition.match(/filename="(.+?)"/) : null;
+    const filename = filenameMatch ? filenameMatch[1] : `Inventory_Report_${Date.now()}.pdf`;
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+    // refresh docs/logs (server should create Doc + ActivityLog)
     await fetchDocuments();
-    qs("#searchDocs")?.addEventListener("input", searchDocuments);
+    await fetchLogs();
+    alert("PDF Report Generated Successfully!");
+  } catch (e) {
+    console.error(e);
+    alert("PDF Generation Failed.");
+  }
+}
+
+// ------------------------------ Documents (upload metadata, download, delete) ------------------------------
+async function uploadDocuments(){
+  const files = qs('#docUpload')?.files || [];
+  let msgEl = qs('#uploadMessage');
+  if(!msgEl){ msgEl = document.createElement('p'); msgEl.id = 'uploadMessage'; if(qs('.controls')) qs('.controls').appendChild(msgEl); }
+
+  if(files.length === 0) { showMsg(msgEl, '⚠️ Please select files to upload.', 'red'); return; }
+  if(!confirm(`Confirm Upload: Upload metadata for ${files.length} document(s)?`)) { showMsg(msgEl, 'Upload cancelled.', 'orange'); return; }
+  showMsg(msgEl, `Uploading ${files.length} document(s) metadata...`, 'orange');
+
+  for(let i=0;i<files.length;i++){
+    const f = files[i];
+    const meta = { name: f.name, type: f.type, sizeBytes: f.size };
+    try {
+      const res = await apiFetch(`${API_BASE}/documents`, { method: 'POST', body: JSON.stringify(meta) });
+      if(!res.ok) throw new Error('Server responded with an error.');
+      showMsg(msgEl, `✅ Uploaded metadata for ${f.name}.`, 'green');
+    } catch(e) {
+      console.error(e);
+      showMsg(msgEl, `❌ Failed to upload metadata for ${f.name}.`, 'red');
+      return;
+    }
   }
 
-  if (currentPage.includes("log")) {
-    await fetchLogs();
+  if(qs('#docUpload')) qs('#docUpload').value = '';
+  setTimeout(async ()=> { await fetchDocuments(); if(msgEl) msgEl.remove(); }, 900);
+}
+
+function downloadDocument(fileNameEncoded) {
+  const fileName = decodeURIComponent(fileNameEncoded);
+  if(!confirm(`Confirm Download: ${fileName}?`)) return;
+  // open download endpoint (server handles Inventory_Report redirect)
+  window.open(`${API_BASE}/documents/download/${encodeURIComponent(fileName)}`, '_blank');
+}
+
+async function deleteDocumentConfirm(id) {
+  const doc = documents.find(d => String(d.id) === String(id));
+  if(!doc) return;
+  if(!confirm(`Delete document metadata for: ${doc.name}?`)) return;
+  try {
+    const res = await apiFetch(`${API_BASE}/documents/${id}`, { method: 'DELETE' });
+    if(res.status === 204 || res.ok) { await fetchDocuments(); await fetchLogs(); alert('🗑️ Document metadata deleted successfully!'); }
+    else alert('❌ Failed to delete document metadata.');
+  } catch(e) { console.error(e); alert('❌ Server error while deleting document metadata.'); }
+}
+
+// ------------------------------ Settings (password change, delete account) ------------------------------
+function bindSettingPage(){
+  const currentUsername = getUsername();
+  if(qs('#currentUser')) qs('#currentUser').textContent = currentUsername;
+
+  qs('#changePasswordBtn')?.addEventListener('click', async ()=> {
+    const newPass = qs('#newPassword')?.value;
+    const confPass = qs('#confirmPassword')?.value;
+    const code = qs('#securityCode')?.value;
+    const msgEl = qs('#passwordMessage');
+    showMsg(msgEl, '');
+    if(!newPass || !confPass || !code) { return showMsg(msgEl, '⚠️ Please fill in all fields.', 'red'); }
+    if(newPass !== confPass) { return showMsg(msgEl, '⚠️ New password and confirmation do not match.', 'red'); }
+    if(!confirm('Confirm Password Change? You will be logged out after a successful update.')) return;
+
+    try {
+      const res = await apiFetch(`${API_BASE}/account/password`, { method: 'PUT', body: JSON.stringify({ username: currentUsername, newPassword: newPass, securityCode: code }) });
+      const data = await res.json();
+      if(res.ok) {
+        showMsg(msgEl, '✅ Password updated successfully! Please log in again.', 'green');
+        qs('#newPassword').value = '';
+        qs('#confirmPassword').value = '';
+        qs('#securityCode').value = '';
+        setTimeout(logout, 1500);
+      } else {
+        showMsg(msgEl, `❌ ${data.message || 'Failed to change password.'}`, 'red');
+      }
+    } catch(e) { showMsg(msgEl, '❌ Server connection failed during password change.', 'red'); console.error(e); }
+  });
+
+  qs('#deleteAccountBtn')?.addEventListener('click', async ()=> {
+    if(!confirm(`⚠️ WARNING: Are you absolutely sure you want to delete the account for "${currentUsername}"?`)) return;
+    const code = prompt('Enter Admin Security Code to CONFIRM account deletion:');
+    if(!code) return alert('Deletion cancelled.');
+    try {
+      const res = await apiFetch(`${API_BASE}/account`, { method: 'DELETE', body: JSON.stringify({ username: currentUsername, securityCode: code }) });
+      const data = await res.json();
+      if(res.ok) { alert('🗑️ Account deleted successfully. You will now be logged out.'); logout(); }
+      else alert(`❌ ${data.message || 'Failed to delete account.'}`);
+    } catch(e) { alert('❌ Server connection failed during account deletion.'); console.error(e); }
+  });
+}
+
+// ------------------------------ Init bindings ------------------------------
+window.addEventListener('load', async () => {
+  // set admin name in header if present
+  const adminName = getUsername();
+  if(qs('#adminName')) qs('#adminName').textContent = adminName;
+
+  // theme restore
+  const theme = localStorage.getItem('theme');
+  if(theme === 'dark') document.body.classList.add('dark-mode');
+
+  try {
+    if(currentPage.includes('inventory')) {
+      await fetchInventory();
+      // bind UI
+      qs('#addProductBtn')?.addEventListener('click', confirmAndAddProduct);
+      qs('#reportBtn')?.addEventListener('click', confirmAndGenerateReport);
+      qs('#pdfReportBtn')?.addEventListener('click', confirmAndGeneratePDF);
+      qs('#searchInput')?.addEventListener('input', ()=> {
+        const q = (qs('#searchInput')?.value || '').toLowerCase().trim();
+        const filtered = inventory.filter(item => (item.sku||'').toLowerCase().includes(q) || (item.name||'').toLowerCase().includes(q) || (item.category||'').toLowerCase().includes(q));
+        renderInventory(filtered);
+      });
+    }
+
+    if(currentPage.includes('product')) {
+      await bindProductPage();
+    }
+
+    if(currentPage.includes('documents')) {
+      await fetchDocuments();
+      qs('#uploadDocsBtn')?.addEventListener('click', uploadDocuments);
+      qs('#searchDocs')?.addEventListener('input', ()=> {
+        const q = (qs('#searchDocs')?.value || '').toLowerCase().trim();
+        const filtered = documents.filter(d => (d.name||'').toLowerCase().includes(q) || (d.date? new Date(d.date).toLocaleString().toLowerCase() : '').includes(q));
+        renderDocuments(filtered);
+      });
+    }
+
+    if(currentPage.includes('log') || currentPage === '' || currentPage === 'index.html') {
+      await fetchLogs();
+      await fetchInventory(); // for dashboard calculations
+    }
+
+    if(currentPage.includes('setting')) {
+      bindSettingPage();
+    }
+
+    // Login/register pages
+    if(currentPage.includes('login.html')) {
+      qs('#loginBtn')?.addEventListener('click', login);
+      qs('#toggleToRegister')?.addEventListener('click', ()=> window.location.href = 'register.html');
+    }
+    if(currentPage.includes('register.html')) {
+      qs('#registerBtn')?.addEventListener('click', register);
+      qs('#toggleToLogin')?.addEventListener('click', ()=> window.location.href = 'login.html');
+    }
+
+  } catch (e) {
+    console.error('Init error', e);
   }
 });
 
-// ------------------------------ GLOBAL EXPOSE ------------------------------
+// ------------------------------ Expose functions for inline onclick ------------------------------
 window.logout = logout;
 window.toggleTheme = toggleTheme;
-window.openEditPageForItem = (id) => {
-  window.location.href = `product.html?id=${id}`;
-};
+window.openEditPageForItem = (id) => { window.location.href = `product.html?id=${encodeURIComponent(id)}`; };
 window.confirmAndDeleteItem = confirmAndDeleteItem;
 window.downloadDocument = downloadDocument;
 window.deleteDocumentConfirm = deleteDocumentConfirm;
-
