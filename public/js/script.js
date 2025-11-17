@@ -1,15 +1,25 @@
 // public/js/script.js
 // Complete, FIXED, UPDATED client script for Online Inventory & Document System
 
+// ------------------------------ API BASE (FIXED FOR RENDER) ------------------------------
 const API_BASE = window.location.hostname.includes("localhost")
   ? "http://localhost:3000/api"
-  : "https://online-inventory-documents-system-olzt.onrender.com/api";
+  : "/api"; // ✔ Correct for single Render service
 
 // Utilities
 const qs = (s) => document.querySelector(s);
-const escapeHtml = (s) => s ? String(s).replace(/[&<>"']/g, c => ({
-  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-}[c])) : '';
+const escapeHtml = (s) =>
+  s
+    ? String(s).replace(/[&<>"']/g, (c) =>
+        ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;",
+        }[c])
+      )
+    : "";
 
 const getUsername = () => sessionStorage.getItem("adminName") || "Guest";
 
@@ -19,31 +29,37 @@ let activityLog = [];
 
 const currentPage = window.location.pathname.split("/").pop();
 
-// Fetch wrapper
+// ------------------------------ UNIVERSAL FETCH WRAPPER ------------------------------
 async function apiFetch(url, options = {}) {
   options.headers = {
     "Content-Type": "application/json",
     "X-Username": getUsername(),
-    ...options.headers
+    ...options.headers,
   };
   return fetch(url, options);
 }
 
-// Auth redirect
-if (!sessionStorage.getItem("isLoggedIn") && !window.location.pathname.includes("login.html")) {
+// ------------------------------ LOGIN REDIRECT ------------------------------
+if (
+  !sessionStorage.getItem("isLoggedIn") &&
+  !window.location.pathname.includes("login.html")
+) {
   window.location.href = "login.html";
 }
 
-// Logout
+// ------------------------------ LOGOUT ------------------------------
 function logout() {
   sessionStorage.clear();
   window.location.href = "login.html";
 }
 
-// Dark mode toggle
+// ------------------------------ DARK MODE ------------------------------
 function toggleTheme() {
   document.body.classList.toggle("dark-mode");
-  localStorage.setItem("theme", document.body.classList.contains("dark-mode") ? "dark" : "light");
+  localStorage.setItem(
+    "theme",
+    document.body.classList.contains("dark-mode") ? "dark" : "light"
+  );
 }
 
 // ------------------------------ RENDER INVENTORY ------------------------------
@@ -53,7 +69,9 @@ function renderInventory(items) {
 
   list.innerHTML = "";
 
-  let tValue = 0, tRevenue = 0, tStock = 0;
+  let tValue = 0,
+    tRevenue = 0,
+    tStock = 0;
 
   items.forEach((it) => {
     const qty = Number(it.quantity || 0);
@@ -135,28 +153,30 @@ function renderLogs() {
   });
 }
 
-// ------------------------------ FETCH DATA ------------------------------
+// ------------------------------ FETCH INVENTORY ------------------------------
 async function fetchInventory() {
   const res = await apiFetch(`${API_BASE}/inventory`);
   const data = await res.json();
-  inventory = data.map(i => ({ ...i, id: i.id || i._id }));
+  inventory = data.map((i) => ({ ...i, id: i.id || i._id }));
   renderInventory(inventory);
 }
 
+// ------------------------------ FETCH DOCUMENTS ------------------------------
 async function fetchDocuments() {
   const res = await apiFetch(`${API_BASE}/documents`);
   const data = await res.json();
-  documents = data.map(d => ({ ...d, id: d.id || d._id }));
+  documents = data.map((d) => ({ ...d, id: d.id || d._id }));
   renderDocuments(documents);
 }
 
+// ------------------------------ FETCH LOGS ------------------------------
 async function fetchLogs() {
   const res = await apiFetch(`${API_BASE}/logs`);
   activityLog = await res.json();
   renderLogs();
 }
 
-// ------------------------------ INVENTORY CRUD ------------------------------
+// ------------------------------ INVENTORY ADD ------------------------------
 async function confirmAndAddProduct() {
   const sku = qs("#p_sku").value.trim();
   const name = qs("#p_name").value.trim();
@@ -171,13 +191,14 @@ async function confirmAndAddProduct() {
 
   await apiFetch(`${API_BASE}/inventory`, {
     method: "POST",
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
   });
 
   await fetchInventory();
   alert("Product added!");
 }
 
+// ------------------------------ DELETE INVENTORY ------------------------------
 async function confirmAndDeleteItem(id) {
   if (!confirm("Delete this item?")) return;
 
@@ -213,16 +234,12 @@ async function confirmAndGenerateReport() {
   a.click();
 }
 
-// ------------------------------ DOCUMENT DOWNLOAD ------------------------------
+// ------------------------------ DOWNLOAD DOCUMENT ------------------------------
 function downloadDocument(fileName) {
   if (!confirm(`Download ${fileName}?`)) return;
 
   const url = `${API_BASE}/documents/download/${encodeURIComponent(fileName)}`;
-
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = fileName;
-  a.click();
+  window.open(url, "_blank");
 }
 
 // ------------------------------ DELETE DOCUMENT ------------------------------
@@ -237,14 +254,15 @@ async function deleteDocumentConfirm(id) {
 // ------------------------------ SEARCH DOCUMENTS ------------------------------
 function searchDocuments() {
   const q = qs("#searchDocs").value.toLowerCase();
-  const filtered = documents.filter((d) =>
-    d.name.toLowerCase().includes(q) ||
-    new Date(d.date).toLocaleString().toLowerCase().includes(q)
+  const filtered = documents.filter(
+    (d) =>
+      d.name.toLowerCase().includes(q) ||
+      new Date(d.date).toLocaleString().toLowerCase().includes(q)
   );
   renderDocuments(filtered);
 }
 
-// ------------------------------ INIT ------------------------------
+// ------------------------------ INIT PAGE ------------------------------
 window.addEventListener("load", async () => {
   const theme = localStorage.getItem("theme");
   if (theme === "dark") document.body.classList.add("dark-mode");
@@ -266,7 +284,7 @@ window.addEventListener("load", async () => {
   }
 });
 
-// Expose functions globally
+// ------------------------------ GLOBAL EXPOSE ------------------------------
 window.logout = logout;
 window.toggleTheme = toggleTheme;
 window.openEditPageForItem = (id) => {
