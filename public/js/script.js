@@ -4,7 +4,7 @@
 // ------------------------------ API BASE (FIXED FOR RENDER) ------------------------------
 const API_BASE = window.location.hostname.includes("localhost")
   ? "http://localhost:3000/api"
-  : "/api"; // ✔ Correct for single Render service
+  : "https://online-inventory-documents-system-olzt.onrender.com/api"; // ✔ Correct for single Render service
 
 // Utilities
 const qs = (s) => document.querySelector(s);
@@ -293,3 +293,4 @@ window.openEditPageForItem = (id) => {
 window.confirmAndDeleteItem = confirmAndDeleteItem;
 window.downloadDocument = downloadDocument;
 window.deleteDocumentConfirm = deleteDocumentConfirm;
+
