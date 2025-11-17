@@ -105,7 +105,7 @@ function renderDocuments(docs) {
       <td>${sizeMB} MB</td>
       <td>${new Date(d.date).toLocaleString()}</td>
       <td class="actions">
-        <button class="primary-btn small-btn" onclick="downloadDocument('${id}')">⬇️ Download</button>
+        <button class="primary-btn small-btn" onclick="downloadDocument('${encodeURIComponent(d.name||'')}')">⬇️ Download</button>
         <button class="danger-btn small-btn" onclick="deleteDocumentConfirm('${id}')">🗑️ Delete</button>
       </td>
     `;
@@ -176,6 +176,7 @@ async function fetchInventory() {
     const res = await apiFetch(`${API_BASE}/inventory`);
     if(!res.ok) throw new Error('Failed to fetch inventory');
     const data = await res.json();
+    // ensure inventory entries have id property
     inventory = data.map(i => ({ ...i, id: i.id || i._id }));
     renderInventory(inventory);
     renderDashboardData();
@@ -357,6 +358,7 @@ async function confirmAndGeneratePDF() {
     const res = await apiFetch(`${API_BASE}/inventory/report/pdf`, { method: 'GET' });
 
     if(!res.ok) {
+      // try to parse message if possible
       try {
         const err = await res.json();
         alert(`Failed to generate PDF: ${err.message || 'Server error'}`);
@@ -371,6 +373,7 @@ async function confirmAndGeneratePDF() {
 
     const a = document.createElement('a');
     a.href = url;
+    // try to use filename from header
     const contentDisposition = res.headers.get('Content-Disposition');
     const filenameMatch = contentDisposition ? contentDisposition.match(/filename="(.+?)"/) : null;
     const filename = filenameMatch ? filenameMatch[1] : `Inventory_Report_${Date.now()}.pdf`;
@@ -387,11 +390,13 @@ async function confirmAndGeneratePDF() {
   }
 }
 
-// Inventory UI bindings
 function bindInventoryUI(){
   qs('#addProductBtn')?.addEventListener('click', confirmAndAddProduct);
   qs('#reportBtn')?.addEventListener('click', confirmAndGenerateReport);
+
+  // PDF button binding (new)
   qs('#pdfReportBtn')?.addEventListener('click', confirmAndGeneratePDF);
+
   qs('#searchInput')?.addEventListener('input', searchInventory);
   qs('#clearSearchBtn')?.addEventListener('click', ()=> { if(qs('#searchInput')) { qs('#searchInput').value=''; searchInventory(); } });
 }
@@ -402,9 +407,9 @@ function searchInventory(){
   renderInventory(filtered);
 }
 
+// Product (edit)
 function openEditPageForItem(id){ window.location.href = `product.html?id=${encodeURIComponent(id)}`; }
 
-// Product edit page
 async function bindProductPage(){
   const params = new URLSearchParams(window.location.search);
   const id = params.get('id');
@@ -445,36 +450,26 @@ async function bindProductPage(){
   qs('#cancelProductBtn')?.addEventListener('click', ()=> window.location.href = 'inventory.html');
 }
 
-// ===== NEW: Upload / Download documents =====
+// Documents
 async function uploadDocuments(){
   const files = qs('#docUpload')?.files || [];
   let msgEl = qs('#uploadMessage');
-  if(!msgEl){
-    msgEl = document.createElement('p');
-    msgEl.id = 'uploadMessage';
-    if(qs('.controls')) qs('.controls').appendChild(msgEl);
-  }
+  if(!msgEl){ msgEl = document.createElement('p'); msgEl.id = 'uploadMessage'; if(qs('.controls')) qs('.controls').appendChild(msgEl); }
 
   if(files.length === 0) { showMsg(msgEl, '⚠️ Please select files to upload.', 'red'); return; }
-  if(!confirm(`Confirm Upload: Upload ${files.length} document(s)?`)) { showMsg(msgEl, 'Upload cancelled.', 'orange'); return; }
+  if(!confirm(`Confirm Upload: Upload metadata for ${files.length} document(s)?`)) { showMsg(msgEl, 'Upload cancelled.', 'orange'); return; }
+  showMsg(msgEl, `Uploading ${files.length} document(s) metadata...`, 'orange');
 
-  showMsg(msgEl, `Uploading ${files.length} document(s)...`, 'orange');
-
-  for(let i=0; i<files.length; i++){
+  for(let i=0;i<files.length;i++){
     const f = files[i];
-    const fd = new FormData();
-    fd.append('file', f);
+    const meta = { name: f.name, type: f.type, sizeBytes: f.size };
     try {
-      const res = await fetch(`${API_BASE}/documents/upload`, {
-        method: 'POST',
-        body: fd,
-        headers: { 'X-Username': getUsername() }
-      });
+      const res = await apiFetch(`${API_BASE}/documents`, { method: 'POST', body: JSON.stringify(meta) });
       if(!res.ok) throw new Error('Server responded with an error.');
-      showMsg(msgEl, `✅ Uploaded ${f.name}`, 'green');
+      showMsg(msgEl, `✅ Uploaded metadata for ${f.name}.`, 'green');
     } catch(e) {
       console.error(e);
-      showMsg(msgEl, `❌ Failed to upload ${f.name}`, 'red');
+      showMsg(msgEl, `❌ Failed to upload metadata for ${f.name}.`, 'red');
       return;
     }
   }
@@ -483,9 +478,10 @@ async function uploadDocuments(){
   setTimeout(async ()=> { await fetchDocuments(); if(msgEl) msgEl.remove(); }, 1000);
 }
 
-function downloadDocument(docId){
-  if(!confirm('Confirm Download?')) return;
-  window.open(`${API_BASE}/documents/download/${encodeURIComponent(docId)}`, '_blank');
+function downloadDocument(fileNameEncoded) {
+  const fileName = decodeURIComponent(fileNameEncoded);
+  if(!confirm(`Confirm Download: ${fileName}?`)) return;
+  window.open(`${API_BASE}/documents/download/${encodeURIComponent(fileName)}`, '_blank');
 }
 
 async function deleteDocumentConfirm(id) {
@@ -575,3 +571,5 @@ window.openEditPageForItem = openEditPageForItem;
 window.confirmAndDeleteItem = confirmAndDeleteItem;
 window.downloadDocument = downloadDocument;
 window.deleteDocumentConfirm = deleteDocumentConfirm;
+
+
