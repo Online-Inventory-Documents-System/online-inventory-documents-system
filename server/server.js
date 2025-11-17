@@ -165,9 +165,8 @@ app.delete("/api/inventory/:id", async (req, res) => {
   res.status(204).send();
 });
 
-/ ============================================================================
-//                 PDF REPORT — SAVE TO DOCUMENTS + LOG USER ACTION
-// ============================================================================
+
+// PDF REPORT — SAVE TO DOCUMENTS + LOG USER ACTION
 app.get("/api/inventory/report/pdf", async (req, res) => {
   try {
     const items = await Inventory.find({}).lean();
