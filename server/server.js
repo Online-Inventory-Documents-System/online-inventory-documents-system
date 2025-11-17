@@ -1,33 +1,26 @@
-// server/server.js  
-// Online Inventory & Documents Management System — Full Combined Version  
-// Includes: multer upload, XLSX/PDF binary saving, fixed downloads
+// server/server.js
+// MongoDB (Mongoose) based server for Online Inventory & Documents Management System
 
 const express = require('express');
 const cors = require('cors');
 const xlsx = require('xlsx');
 const mongoose = require('mongoose');
 const path = require('path');
-const PDFDocument = require('pdfkit');
-
-// ---- NEW: multer for file uploads ----
-const multer = require('multer');
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 } // 20MB
-});
+const PDFDocument = require('pdfkit');   // PDF generator
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MONGODB_URI = process.env.MONGODB_URI;
 const SECURITY_CODE = process.env.SECRET_SECURITY_CODE || "1234";
 
+// ===== Middleware =====
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ---- MongoDB connect ----
+// ===== MongoDB Connection =====
 if (!MONGODB_URI) {
-  console.error("MONGODB_URI missing.");
+  console.error("MONGODB_URI is not set.");
   process.exit(1);
 }
 
@@ -35,15 +28,19 @@ mongoose.set("strictQuery", false);
 mongoose.connect(MONGODB_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true
-}).then(() => console.log("MongoDB connected"))
-.catch(err => { console.error(err); process.exit(1); });
+})
+.then(() => console.log("Connected to MongoDB Atlas"))
+.catch(err => {
+  console.error("MongoDB connect error:", err);
+  process.exit(1);
+});
 
 const { Schema } = mongoose;
 
-// ---- Schemas: now all documents have "data" + "contentType" ----
+// ===== Schemas =====
 const UserSchema = new Schema({
-  username: String,
-  password: String,
+  username: { type: String, unique: true, required: true },
+  password: { type: String, required: true },
   createdAt: { type: Date, default: Date.now }
 });
 const User = mongoose.model("User", UserSchema);
@@ -52,370 +49,514 @@ const InventorySchema = new Schema({
   sku: String,
   name: String,
   category: String,
-  quantity: Number,
-  unitCost: Number,
-  unitPrice: Number,
+  quantity: { type: Number, default: 0 },
+  unitCost: { type: Number, default: 0 },
+  unitPrice: { type: Number, default: 0 },
   createdAt: { type: Date, default: Date.now }
 });
 const Inventory = mongoose.model("Inventory", InventorySchema);
 
-// ---- DOCUMENTS now store the file buffer ----
 const DocumentSchema = new Schema({
   name: String,
   size: Number,
-  date: Date,
-  data: Buffer,
-  contentType: String
+  date: { type: Date, default: Date.now }
 });
 const Doc = mongoose.model("Doc", DocumentSchema);
 
 const LogSchema = new Schema({
   user: String,
   action: String,
-  time: Date
+  time: { type: Date, default: Date.now }
 });
 const ActivityLog = mongoose.model("ActivityLog", LogSchema);
 
-// --- Log dedupe ---
-const DUPLICATE_WINDOW_MS = 30000;
+// ===== Duplicate Log Protection =====
+const DUPLICATE_WINDOW_MS = 30 * 1000;
+
 async function logActivity(user, action) {
   try {
-    const last = await ActivityLog.findOne({}).sort({ time: -1 }).lean();
+    const safeUser = (user || "Unknown").toString();
+    const safeAction = (action || "").toString();
     const now = Date.now();
 
-    if (last &&
-      last.user === user &&
-      last.action === action &&
-      now - new Date(last.time).getTime() <= DUPLICATE_WINDOW_MS) return;
+    const last = await ActivityLog.findOne({}).sort({ time: -1 }).lean().exec();
+    if (last) {
+      const lastUser = last.user || "Unknown";
+      const lastAction = last.action || "";
+      const lastTime = last.time ? new Date(last.time).getTime() : 0;
 
-    await ActivityLog.create({ user, action, time: new Date() });
-  } catch (err) { console.error(err); }
+      if (
+        lastUser === safeUser &&
+        lastAction === safeAction &&
+        now - lastTime <= DUPLICATE_WINDOW_MS
+      ) {
+        return;
+      }
+    }
+
+    await ActivityLog.create({
+      user: safeUser,
+      action: safeAction,
+      time: new Date()
+    });
+
+  } catch (err) {
+    console.error("logActivity error:", err);
+  }
 }
 
-// ---- Auth ----
+// ===== Health Check =====
+app.get("/api/test", (req, res) => {
+  res.json({ success: true, message: "API is up", time: new Date().toISOString() });
+});
+
+// ============================================================================
+//                               AUTH SYSTEM
+// ============================================================================
 app.post("/api/register", async (req, res) => {
-  const { username, password, securityCode } = req.body;
+  const { username, password, securityCode } = req.body || {};
 
   if (securityCode !== SECURITY_CODE)
-    return res.status(403).json({ message: "Invalid security code" });
+    return res.status(403).json({ success: false, message: "Invalid security code" });
 
-  const exists = await User.findOne({ username });
-  if (exists) return res.status(409).json({ message: "Username exists" });
+  if (!username || !password)
+    return res.status(400).json({ success: false, message: "Missing username or password" });
 
-  await User.create({ username, password });
-  await logActivity("System", `Registered user: ${username}`);
-  res.json({ success: true });
+  try {
+    const exists = await User.findOne({ username }).lean();
+    if (exists)
+      return res.status(409).json({ success: false, message: "Username already exists" });
+
+    await User.create({ username, password });
+    await logActivity("System", `Registered user: ${username}`);
+
+    res.json({ success: true, message: "Registration successful" });
+  } catch (err) {
+    console.error("register error", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
 });
 
 app.post("/api/login", async (req, res) => {
-  const { username, password } = req.body;
+  const { username, password } = req.body || {};
 
-  const user = await User.findOne({ username, password });
-  if (!user) return res.status(401).json({ message: "Invalid credentials" });
+  if (!username || !password)
+    return res.status(400).json({ success: false, message: "Missing credentials" });
 
-  await logActivity(username, "Logged in");
-  res.json({ success: true, user: username });
+  try {
+    const user = await User.findOne({ username, password }).lean();
+    if (!user)
+      return res.status(401).json({ success: false, message: "Invalid credentials" });
+
+    await logActivity(username, "Logged in");
+    res.json({ success: true, user: username });
+  } catch (err) {
+    console.error("login error", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
 });
 
-// ---- Inventory CRUD ----
+// ============================================================================
+//                                 INVENTORY CRUD
+// ============================================================================
 app.get("/api/inventory", async (req, res) => {
-  const items = await Inventory.find({}).lean();
-  res.json(items.map(i => ({ ...i, id: i._id })));
+  try {
+    const items = await Inventory.find({}).lean();
+    const normalized = items.map(i => ({
+      ...i,
+      id: i._id.toString()
+    }));
+    res.json(normalized);
+  } catch (err) {
+    console.error("inventory get error", err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
 app.post("/api/inventory", async (req, res) => {
-  const item = await Inventory.create(req.body);
-  await logActivity(req.headers["x-username"], `Added: ${item.name}`);
-  res.json({ ...item.toObject(), id: item._id });
+  try {
+    const item = await Inventory.create(req.body);
+    await logActivity(req.headers["x-username"], `Added: ${item.name}`);
+
+    res.status(201).json({
+      ...item.toObject(),
+      id: item._id.toString()
+    });
+
+  } catch (err) {
+    console.error("inventory post error", err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
 app.put("/api/inventory/:id", async (req, res) => {
-  const item = await Inventory.findByIdAndUpdate(req.params.id, req.body, { new: true });
-  if (!item) return res.status(404).json({ message: "Not found" });
-  await logActivity(req.headers["x-username"], `Updated: ${item.name}`);
-  res.json({ ...item.toObject(), id: item._id });
+  try {
+    const item = await Inventory.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (!item)
+      return res.status(404).json({ message: "Item not found" });
+
+    await logActivity(req.headers["x-username"], `Updated: ${item.name}`);
+    res.json({
+      ...item.toObject(),
+      id: item._id.toString()
+    });
+
+  } catch (err) {
+    console.error("inventory update error", err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
 app.delete("/api/inventory/:id", async (req, res) => {
-  const item = await Inventory.findByIdAndDelete(req.params.id);
-  if (!item) return res.status(404).json({ message: "Not found" });
-  await logActivity(req.headers["x-username"], `Deleted: ${item.name}`);
-  res.status(204).send();
+  try {
+    const item = await Inventory.findByIdAndDelete(req.params.id);
+    if (!item)
+      return res.status(404).json({ message: "Item not found" });
+
+    await logActivity(req.headers["x-username"], `Deleted: ${item.name}`);
+    res.status(204).send();
+
+  } catch (err) {
+    console.error("inventory delete error", err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
-// ========================================================================
-//                      PDF REPORT (stores binary into DB)
-// ========================================================================
+
+// ============================================================================
+//                 PDF REPORT — SAVE TO DOCUMENTS + LOG USER ACTION
+// ============================================================================
 app.get("/api/inventory/report/pdf", async (req, res) => {
   try {
     const items = await Inventory.find({}).lean();
+
     const now = new Date();
-
-    // Malaysia time
-    const printDate = new Date(now).toLocaleString("en-US", {
-      timeZone: "Asia/Kuala_Lumpur",
-      year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "numeric", minute: "2-digit", second: "2-digit",
-      hour12: true
-    });
-
-    const filename = `Inventory_Report_${now.toISOString().slice(0,10)}_${Date.now()}.pdf`;
+    const printDate = now.toLocaleString();
+    const reportId = `REP-${Date.now()}`;
     const printedBy = req.headers["x-username"] || "System";
 
-    // collect PDF chunks
-    let chunks = [];
-    const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 40, bufferPages: true });
-    doc.on("data", c => chunks.push(c));
+    const filename = `Inventory_Report_${now.toISOString().slice(0, 10)}_${Date.now()}.pdf`;
 
-    doc.on("end", async () => {
-      const buffer = Buffer.concat(chunks);
-      await Doc.create({
-        name: filename,
-        size: buffer.length,
-        date: new Date(),
-        data: buffer,
-        contentType: "application/pdf"
-      });
-      await logActivity(printedBy, `Generated Inventory PDF: ${filename}`);
+    // ============================
+    // Prepare PDF buffer collector
+    // ============================
+    let pdfChunks = [];
+    const doc = new PDFDocument({
+      size: "A4",
+      layout: "landscape",
+      margin: 40,
+      bufferPages: true
     });
 
-    // stream to client
+    // Capture PDF buffer
+    doc.on("data", chunk => pdfChunks.push(chunk));
+    doc.on("end", async () => {
+      const pdfBuffer = Buffer.concat(pdfChunks);
+
+      // Save PDF record in Document database
+      await Doc.create({
+        name: filename,
+        size: pdfBuffer.length,
+        date: new Date()
+      });
+
+      // Log user action
+      await logActivity(
+        printedBy,
+        `Generated Inventory Report PDF: ${filename}`
+      );
+    });
+
+    // Also send PDF to user
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.setHeader("Content-Type", "application/pdf");
     doc.pipe(res);
 
-    // HEADER
-    doc.fontSize(22).text("L&B Company", 40, 40);
-    doc.fontSize(10);
-    doc.text("INVENTORY REPORT", 620, 40);
-    doc.text(`Print Date: ${printDate}`, 620, 65);
-    doc.text(`Printed By: ${printedBy}`, 620, 80);
+    // =====================================================
+    // HEADER (Only shown on First Page)
+    // =====================================================
+    doc.fontSize(22).font("Helvetica-Bold").text("L&B Company", 40, 40);
+    doc.fontSize(10).font("Helvetica");
+    doc.text("Jalan Mawar 8, Taman Bukit Beruang Permai, Melaka", 40, 70);
+    doc.text("Phone: 01133127622", 40, 85);
+    doc.text("Email: lbcompany@gmail.com", 40, 100);
 
-    doc.moveTo(40, 120).lineTo(800, 120).stroke();
+    doc.font("Helvetica-Bold").fontSize(15)
+       .text("INVENTORY REPORT", 620, 40);
 
-    // TABLE
-    const rowH = 18;
-    const col = { sku:40,name:100,cat:260,qty:340,cost:400,price:480,val:560,rev:650 };
-    const w = { sku:60,name:160,cat:80,qty:60,cost:80,price:80,val:90,rev:100 };
+    doc.font("Helvetica").fontSize(10);
+    doc.text(`Print Date: ${printDate}`, 620, 63);
+    doc.text(`Report ID: ${reportId}`, 620, 78);
+    doc.text(`Status: Generated`, 620, 93);
+    doc.text(`Printed by: ${printedBy}`, 620, 108);
 
-    let y = 140;
-    function header() {
-      doc.font("Helvetica-Bold");
-      Object.keys(col).forEach(k => doc.rect(col[k],y,w[k],rowH).stroke());
-      doc.text("SKU",col.sku+3,y+4);
-      doc.text("Product",col.name+3,y+4);
-      doc.text("Category",col.cat+3,y+4);
-      doc.text("Qty",col.qty+3,y+4);
-      doc.text("Unit Cost",col.cost+3,y+4);
-      doc.text("Unit Price",col.price+3,y+4);
-      doc.text("Value",col.val+3,y+4);
-      doc.text("Revenue",col.rev+3,y+4);
-      doc.font("Helvetica");
-      y += rowH;
-    }
-    header();
+    doc.moveTo(40, 130).lineTo(800, 130).stroke();
 
-    let subtotal=0,totalVal=0,totalRev=0, count=0;
-    for (const it of items) {
-      if (count===10) {
-        doc.addPage({ size:"A4", layout:"landscape", margin:40 });
-        y=40; count=0; header();
+    // =====================================================
+    // TABLE SETTINGS
+    // =====================================================
+    const rowHeight = 18;
+    const colX = {
+      sku: 40, name: 100, category: 260, qty: 340,
+      cost: 400, price: 480, value: 560, revenue: 670
+    };
+    const width = {
+      sku: 60, name: 160, category: 80, qty: 60,
+      cost: 80, price: 80, value: 110, revenue: 120
+    };
+
+    let y = 150;
+    let rowsOnPage = 0;
+
+    function drawHeader() {
+      doc.font("Helvetica-Bold").fontSize(10);
+      for (const col of Object.keys(colX)) {
+        doc.rect(colX[col], y, width[col], rowHeight).stroke();
       }
-      const qty=it.quantity||0;
-      const cost=it.unitCost||0;
-      const price=it.unitPrice||0;
-      const val=qty*cost, rev=qty*price;
-      subtotal+=qty; totalVal+=val; totalRev+=rev;
+      doc.text("SKU", colX.sku + 3, y + 4);
+      doc.text("Product Name", colX.name + 3, y + 4);
+      doc.text("Category", colX.category + 3, y + 4);
+      doc.text("Quantity", colX.qty + 3, y + 4);
+      doc.text("Unit Cost", colX.cost + 3, y + 4);
+      doc.text("Unit Price", colX.price + 3, y + 4);
+      doc.text("Total Inventory Value", colX.value + 3, y + 4);
+      doc.text("Total Potential Revenue", colX.revenue + 3, y + 4);
 
-      Object.keys(col).forEach(k => doc.rect(col[k],y,w[k],rowH).stroke());
-      doc.text(it.sku||"",col.sku+3,y+4);
-      doc.text(it.name||"",col.name+3,y+4);
-      doc.text(it.category||"",col.cat+3,y+4);
-      doc.text(String(qty),col.qty+3,y+4);
-      doc.text(`RM ${cost.toFixed(2)}`,col.cost+3,y+4);
-      doc.text(`RM ${price.toFixed(2)}`,col.price+3,y+4);
-      doc.text(`RM ${val.toFixed(2)}`,col.val+3,y+4);
-      doc.text(`RM ${rev.toFixed(2)}`,col.rev+3,y+4);
-
-      y+=rowH; count++;
+      y += rowHeight;
+      doc.font("Helvetica").fontSize(9);
     }
 
-    // TOTAL BOX
-    const last = doc.bufferedPageRange().count-1;
+    drawHeader();
+
+    let subtotalQty = 0, totalValue = 0, totalRevenue = 0;
+
+    // =====================================================
+    // TABLE ROWS — max 10 per page
+    // =====================================================
+    for (const it of items) {
+      if (rowsOnPage === 10) {
+        doc.addPage({ size: "A4", layout: "landscape", margin: 40 });
+        y = 40;
+        rowsOnPage = 0;
+        drawHeader();
+      }
+
+      const qty = Number(it.quantity || 0);
+      const cost = Number(it.unitCost || 0);
+      const price = Number(it.unitPrice || 0);
+      const val = qty * cost;
+      const rev = qty * price;
+
+      subtotalQty += qty;
+      totalValue += val;
+      totalRevenue += rev;
+
+      for (const col of Object.keys(colX)) {
+        doc.rect(colX[col], y, width[col], rowHeight).stroke();
+      }
+
+      doc.text(it.sku || "", colX.sku + 3, y + 4);
+      doc.text(it.name || "", colX.name + 3, y + 4);
+      doc.text(it.category || "", colX.category + 3, y + 4);
+      doc.text(String(qty), colX.qty + 3, y + 4);
+      doc.text(`RM ${cost.toFixed(2)}`, colX.cost + 3, y + 4);
+      doc.text(`RM ${price.toFixed(2)}`, colX.price + 3, y + 4);
+      doc.text(`RM ${val.toFixed(2)}`, colX.value + 3, y + 4);
+      doc.text(`RM ${rev.toFixed(2)}`, colX.revenue + 3, y + 4);
+
+      y += rowHeight;
+      rowsOnPage++;
+    }
+
+    // =====================================================
+    // TOTAL BOX (Last Page)
+    // =====================================================
+    const last = doc.bufferedPageRange().count - 1;
     doc.switchToPage(last);
-    let tY = y+20; if(tY>480) tY=480;
-    doc.rect(560,tY,200,60).stroke();
-    doc.font("Helvetica-Bold");
-    doc.text(`Subtotal: ${subtotal} units`, 570,tY+8);
-    doc.text(`Value: RM ${totalVal.toFixed(2)}`,570,tY+26);
-    doc.text(`Revenue: RM ${totalRev.toFixed(2)}`,570,tY+44);
 
-    // FOOTERS
+    let boxY = y + 20;
+    if (boxY > 480) boxY = 480;
+
+    doc.rect(560, boxY, 230, 68).stroke();
+
+    doc.font("Helvetica-Bold").fontSize(10);
+    doc.text(`Subtotal (Quantity): ${subtotalQty} units`, 570, boxY + 10);
+    doc.text(`Total Inventory Value: RM ${totalValue.toFixed(2)}`, 570, boxY + 28);
+    doc.text(`Total Potential Revenue: RM ${totalRevenue.toFixed(2)}`, 570, boxY + 46);
+
+    doc.flushPages();
+
+    // =====================================================
+    // FOOTER + PAGE NUMBER
+    // =====================================================
     const pages = doc.bufferedPageRange();
-    for(let i=0;i<pages.count;i++){
+    for (let i = 0; i < pages.count; i++) {
       doc.switchToPage(i);
-      doc.fontSize(9).text("Generated by L&B Company System",0,doc.page.height-40,{align:"center"});
-      doc.text(`Page ${i+1} of ${pages.count}`,0,doc.page.height-25,{align:"center"});
+      doc.fontSize(9).text(
+        "Generated by L&B Company Inventory System",
+        0, doc.page.height - 40,
+        { align: "center" }
+      );
+      doc.text(`Page ${i + 1} of ${pages.count}`,
+        0, doc.page.height - 25,
+        { align: "center" }
+      );
     }
+
     doc.end();
 
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message:"PDF gen fail" });
+    console.error("PDF Error:", err);
+    res.status(500).json({ message: "PDF generation failed" });
   }
 });
 
-// ========================================================================
-//                    XLSX REPORT (store binary into DB)
-// ========================================================================
+// ============================================================================
+//                                   XLSX REPORT
+// ============================================================================
 app.get("/api/inventory/report", async (req, res) => {
   try {
     const items = await Inventory.find({}).lean();
-    const filename = `Inventory_Report_${new Date().toISOString().slice(0,10)}_${Date.now()}.xlsx`;
+    const filenameBase = `Inventory_Report_${new Date().toISOString().slice(0, 10)}`;
+    const filename = `${filenameBase}.xlsx`;
 
-    const rows = [
+    const ws_data = [
       ["L&B Company - Inventory Report"],
-      ["Date:", new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Kuala_Lumpur"})],
+      ["Date:", new Date().toISOString().slice(0, 10)],
       [],
-      ["SKU","Name","Category","Qty","Unit Cost","Unit Price","Value","Revenue"]
+      ["SKU", "Name", "Category", "Quantity", "Unit Cost", "Unit Price", "Total Inventory Value", "Total Potential Revenue"]
     ];
 
-    let totalVal=0,totalRev=0;
-    items.forEach(it=>{
-      const qty=it.quantity||0;
-      const uc=it.unitCost||0;
-      const up=it.unitPrice||0;
-      const v=qty*uc, r=qty*up;
-      totalVal+=v; totalRev+=r;
-      rows.push([it.sku,it.name,it.category,qty,uc.toFixed(2),up.toFixed(2),v.toFixed(2),r.toFixed(2)]);
+    let totalValue = 0;
+    let totalRevenue = 0;
+
+    items.forEach(it => {
+      const qty = Number(it.quantity || 0);
+      const uc = Number(it.unitCost || 0);
+      const up = Number(it.unitPrice || 0);
+      const invVal = qty * uc;
+      const rev = qty * up;
+
+      totalValue += invVal;
+      totalRevenue += rev;
+
+      ws_data.push([
+        it.sku || "",
+        it.name || "",
+        it.category || "",
+        qty,
+        uc.toFixed(2),
+        up.toFixed(2),
+        invVal.toFixed(2),
+        rev.toFixed(2)
+      ]);
     });
 
-    rows.push([]);
-    rows.push(["","","","Totals","","",totalVal.toFixed(2),totalRev.toFixed(2)]);
+    ws_data.push([]);
+    ws_data.push(["", "", "", "Totals", "", "", totalValue.toFixed(2), totalRevenue.toFixed(2)]);
 
-    const ws=xlsx.utils.aoa_to_sheet(rows);
-    const wb=xlsx.utils.book_new();
-    xlsx.utils.book_append_sheet(wb,ws,"Report");
-    const buf=xlsx.write(wb,{type:"buffer",bookType:"xlsx"});
+    const ws = xlsx.utils.aoa_to_sheet(ws_data);
+    const wb = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(wb, ws, "Inventory Report");
+    const wb_out = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
 
-    await Doc.create({
-      name: filename,
-      size: buf.length,
-      date: new Date(),
-      data: buf,
-      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    });
-
-    await logActivity(req.headers["x-username"],`Generated XLSX: ${filename}`);
+    await Doc.create({ name: filename, size: wb_out.length, date: new Date() });
+    await logActivity(req.headers["x-username"], `Generated Inventory Report XLSX`);
 
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.setHeader("Content-Type",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.send(buf);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.send(wb_out);
 
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message:"XLSX gen fail" });
-  }
-});
-// ========================================================================
-//              DOCUMENT UPLOAD (multer memory storage)
-// ========================================================================
-app.post("/api/documents", upload.single('file'), async (req, res) => {
-  try {
-    if (!req.file)
-      return res.status(400).json({ message:"Upload requires field: file" });
-
-    const name = req.body.name || req.file.originalname;
-    const buffer = req.file.buffer;
-    const type = req.file.mimetype;
-
-    const docu = await Doc.create({
-      name,
-      size: buffer.length,
-      date: new Date(),
-      data: buffer,
-      contentType: type
-    });
-
-    await logActivity(req.headers["x-username"],`Uploaded: ${name}`);
-
-    res.status(201).json({ ...docu.toObject(), id: docu._id });
-
-  } catch (err) {
-    console.error("Upload err:", err);
-    res.status(500).json({ message: "Upload failed" });
+    console.error("XLSX error", err);
+    return res.status(500).json({ message: "Report generation failed" });
   }
 });
 
-// ========================================================================
-//                    DOCUMENT DOWNLOAD (serves binary)
-// ========================================================================
-app.get("/api/documents/download/:filename", async (req, res) => {
-  try {
-    const fname = req.params.filename;
-    const docu = await Doc.findOne({ name: fname });
-
-    if (!docu) return res.status(404).json({ message:"Not found" });
-    if (!docu.data) return res.status(404).json({ message:"File has no data" });
-
-    res.setHeader("Content-Disposition",`attachment; filename="${docu.name}"`);
-    res.setHeader("Content-Type", docu.contentType || "application/octet-stream");
-
-    res.send(docu.data);
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message:"Download error" });
-  }
-});
-
-// ========================================================================
-//                           DOCUMENT LIST
-// ========================================================================
+// ============================================================================
+//                                   DOCUMENTS CRUD
+// ============================================================================
 app.get("/api/documents", async (req, res) => {
-  const docs = await Doc.find({}).sort({date:-1}).lean();
-  res.json(docs.map(d => ({...d, id:d._id, sizeBytes:d.size||0 })));
+  try {
+    const docs = await Doc.find({}).sort({ date: -1 }).lean();
+    res.json(docs.map(d => ({ ...d, id: d._id.toString() })));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
-// ========================================================================
-//                           DOCUMENT DELETE
-// ========================================================================
-app.delete("/api/documents/:id", async (req,res)=>{
-  const docu = await Doc.findByIdAndDelete(req.params.id);
-  if (!docu) return res.status(404).json({ message:"Not found" });
-  await logActivity(req.headers["x-username"],`Deleted: ${docu.name}`);
-  res.status(204).send();
+app.post("/api/documents", async (req, res) => {
+  try {
+    const docu = await Doc.create({ ...req.body, date: new Date() });
+    await logActivity(req.headers["x-username"], `Uploaded document: ${docu.name}`);
+    res.status(201).json({ ...docu.toObject(), id: docu._id.toString() });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
-// ========================================================================
-//                            ACTIVITY LOGS
-// ========================================================================
+app.delete("/api/documents/:id", async (req, res) => {
+  try {
+    const docu = await Doc.findByIdAndDelete(req.params.id);
+    if (!docu) return res.status(404).json({ message: "Document not found" });
+
+    await logActivity(req.headers["x-username"], `Deleted document: ${docu.name}`);
+    res.status(204).send();
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// ============================================================================
+//                               ACTIVITY LOGS
+// ============================================================================
 app.get("/api/logs", async (req, res) => {
-  const logs = await ActivityLog.find({}).sort({ time:-1 }).lean();
-  res.json(logs.map(l => ({
-    user:l.user,
-    action:l.action,
-    time:l.time? new Date(l.time).toISOString() : null
-  })));
+  try {
+    const logs = await ActivityLog.find({}).sort({ time: -1 }).limit(500).lean();
+    res.json(logs.map(l => ({
+      user: l.user,
+      action: l.action,
+      time: l.time ? new Date(l.time).toISOString() : new Date().toISOString()
+    })));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
-// ========================================================================
-//                            FRONTEND + START
-// ========================================================================
-app.use(express.static(path.join(__dirname,"../public")));
+// ============================================================================
+//                              SERVE FRONTEND
+// ============================================================================
+app.use(express.static(path.join(__dirname, "../public")));
 
-app.get("*",(req,res)=>{
+app.get("*", (req, res) => {
   if (req.path.startsWith("/api/"))
-    return res.status(404).json({ message:"API route not found" });
-  res.sendFile(path.join(__dirname,"../public/index.html"));
+    return res.status(404).json({ message: "API route not found" });
+
+  res.sendFile(path.join(__dirname, "../public/index.html"));
 });
 
-async function bootstrap() {
-  const n = await User.countDocuments();
-  if (!n) await User.create({username:"admin",password:"password"});
-  await logActivity("System","Server started");
+// ============================================================================
+//                        STARTUP HELPER + START SERVER
+// ============================================================================
+async function ensureDefaultAdminAndStartupLog() {
+  try {
+    const count = await User.countDocuments({}).exec();
+    if (count === 0) {
+      await User.create({ username: "admin", password: "password" });
+      await logActivity("System", "Default admin user created");
+    }
+    await logActivity("System", `Server started on port ${PORT}`);
+  } catch (err) {
+    console.error("Startup error:", err);
+  }
 }
 
-bootstrap().then(()=>{
-  app.listen(PORT,()=>console.log("Server running on",PORT));
-});
+(async () => {
+  await ensureDefaultAdminAndStartupLog();
+  console.log("Starting server...");
+  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+})();
