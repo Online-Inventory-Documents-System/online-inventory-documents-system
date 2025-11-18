@@ -518,6 +518,25 @@ app.delete("/api/documents/:id", async (req, res) => {
   }
 });
 
+// Add this to server.js in the DOCUMENTS CRUD section
+app.get("/api/documents/:id/check", async (req, res) => {
+  try {
+    const docu = await Doc.findById(req.params.id);
+    if (!docu) {
+      return res.status(404).json({ hasData: false });
+    }
+    
+    res.json({
+      hasData: !!(docu.data && docu.data.length > 0),
+      size: docu.size,
+      name: docu.name
+    });
+  } catch (err) {
+    console.error("Document check error:", err);
+    res.status(500).json({ hasData: false });
+  }
+});
+
 // ============================================================================
 //                             DOCUMENTS DOWNLOAD
 // ============================================================================
