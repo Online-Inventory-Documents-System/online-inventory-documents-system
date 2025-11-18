@@ -469,40 +469,54 @@ app.get("/api/inventory/report", async (req, res) => {
 });
 
 // ============================================================================
-//                       DOCUMENTS UPLOAD (CRITICAL FIX - NO MULTER)
+//                       DOCUMENTS UPLOAD (NO MULTER) - REPLACEMENT
 // ============================================================================
 // Apply the raw body parser middleware only to this route
 app.post("/api/documents", rawBodyMiddleware, async (req, res) => {
-  // req.body now contains the raw file buffer because of rawBodyMiddleware
-  const fileBuffer = req.body;
-  
-  // Get metadata from request headers (set by the updated script.js)
-  const contentType = req.headers['content-type']; 
-  const fileName = req.headers['x-file-name'];     
-  const username = req.headers["x-username"];
-
-  if (!fileBuffer || !fileBuffer.length || !contentType || !fileName) {
-    return res.status(400).json({ 
-      message: "No file content or required metadata (filename/type) provided for upload. Ensure script.js is updated." 
-    });
-  }
-
   try {
+    // Normalize request body into a Node Buffer (covers Buffer, ArrayBuffer, TypedArray)
+    let fileBuffer = null;
+    if (Buffer.isBuffer(req.body)) {
+      fileBuffer = req.body;
+    } else if (req.body instanceof ArrayBuffer) {
+      fileBuffer = Buffer.from(new Uint8Array(req.body));
+    } else if (req.body && req.body.buffer && typeof req.body.byteLength === 'number') {
+      // e.g. a typed array view
+      fileBuffer = Buffer.from(req.body.buffer, req.body.byteOffset || 0, req.body.byteLength);
+    } else {
+      try {
+        fileBuffer = Buffer.from(req.body);
+      } catch (e) {
+        fileBuffer = null;
+      }
+    }
+
+    const contentType = (req.headers['content-type'] || 'application/octet-stream').split(';')[0].trim();
+    const fileName = req.headers['x-file-name'] || req.headers['x-filename'] || `file_${Date.now()}`;
+    const username = req.headers['x-username'] || 'Unknown';
+
+    if (!fileBuffer || fileBuffer.length === 0) {
+      return res.status(400).json({
+        message: "No file content received or file is empty. Ensure client sends raw bytes and 'X-File-Name' header."
+      });
+    }
+
+    // Save to DB ensuring 'data' is a Node Buffer
     const docu = await Doc.create({
-      name: fileName,
+      name: String(fileName),
       size: fileBuffer.length,
       date: new Date(),
-      data: fileBuffer,       // Save the raw buffer
-      contentType: contentType // Save the MIME type
+      data: fileBuffer,
+      contentType: String(contentType)
     });
-    
+
     await logActivity(username, `Uploaded document: ${docu.name} (${contentType})`);
-    
-    // Respond with the uploaded document metadata (as an array to match client expectations)
-    res.status(201).json([{ ...docu.toObject(), id: docu._id.toString() }]); 
+
+    // Return metadata (array format preserved as your client expects)
+    return res.status(201).json([{ ...docu.toObject(), id: docu._id.toString() }]);
   } catch (err) {
     console.error("Document upload error:", err);
-    res.status(500).json({ message: "Server error during file storage." });
+    return res.status(500).json({ message: "Server error during file storage." });
   }
 });
 
@@ -511,116 +525,123 @@ app.post("/api/documents", rawBodyMiddleware, async (req, res) => {
 // ============================================================================
 app.get("/api/documents", async (req, res) => {
   try {
-    // Exclude the 'data' buffer from the metadata list to save memory
+    // Exclude the large 'data' field when listing metadata
     const docs = await Doc.find({}).select('-data').sort({ date: -1 }).lean();
     res.json(docs.map(d => ({ ...d, id: d._id.toString() })));
   } catch (err) {
-    console.error(err);
+    console.error("GET /api/documents error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
 
 app.delete("/api/documents/:id", async (req, res) => {
   try {
-    const docu = await Doc.findByIdAndDelete(req.params.id);
+    const docu = await Doc.findByIdAndDelete(req.params.id).lean();
     if (!docu) return res.status(404).json({ message: "Document not found" });
 
     await logActivity(req.headers["x-username"], `Deleted document: ${docu.name}`);
-    res.status(204).send();
-
+    return res.status(204).send();
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server error" });
+    console.error("DELETE /api/documents/:id error:", err);
+    return res.status(500).json({ message: "Server error" });
   }
 });
 
 // ============================================================================
-//                             DOCUMENTS DOWNLOAD
+//                             DOCUMENTS DOWNLOAD (ROBUST)
 //  - by id: /api/documents/download/:id
 //  - by name: /api/documents/download/name/:name  (use encodeURIComponent on client)
 //  - optional query param inline=1 to open in-browser instead of attachment
 // ============================================================================
-function toNodeBuffer(dbData) {
-  // dbData may be a Buffer, mongoose's Binary, or Uint8Array-like — normalize to Buffer
+function normalizeDbDataToBuffer(dbData) {
   if (!dbData) return null;
   if (Buffer.isBuffer(dbData)) return dbData;
-  // mongoose Binary type: dbData.buffer may exist
-  if (dbData.buffer && dbData.byteLength) {
-    return Buffer.from(dbData.buffer, dbData.byteOffset || 0, dbData.byteLength);
+  // Mongoose Binary may have .buffer property
+  if (dbData && dbData.buffer && typeof dbData.byteLength === 'number') {
+    try {
+      return Buffer.from(dbData.buffer, dbData.byteOffset || 0, dbData.byteLength);
+    } catch (e) {
+      // fallback below
+    }
   }
-  // Uint8Array or array-like
-  try {
-    return Buffer.from(dbData);
-  } catch (e) {
-    return null;
-  }
+  // ArrayBuffer or typed array
+  if (dbData instanceof ArrayBuffer) return Buffer.from(new Uint8Array(dbData));
+  try { return Buffer.from(dbData); } catch (e) { return null; }
 }
 
-function safeContentDispositionFilename(name) {
-  // Remove newlines and control chars
-  const sanitized = name.replace(/[\r\n"]/g, '').replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
-  // Basic fallback for very long names: keep last 200 chars
+function sanitizeFilename(name) {
+  if (!name) return 'file';
+  // strip control chars and quotes/newlines
+  const sanitized = String(name).replace(/[\r\n"]/g, '').replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
+  // keep last 200 chars to avoid overly long header values
   return sanitized.length > 200 ? sanitized.slice(-200) : sanitized;
 }
 
+// Download by id
 app.get("/api/documents/download/:id", async (req, res) => {
   try {
     const inline = String(req.query.inline || '') === '1';
-    const docu = await Doc.findById(req.params.id).lean();
+    const id = req.params.id;
+    if (!id) return res.status(400).json({ message: "Missing document id" });
+
+    const docu = await Doc.findById(id).lean();
     if (!docu) return res.status(404).json({ message: "Document not found" });
 
-    const buf = toNodeBuffer(docu.data);
+    const buf = normalizeDbDataToBuffer(docu.data);
     if (!buf) {
       return res.status(400).json({
-        message: "File content not stored on server. This file may have been uploaded before the schema fix. Try generating a new report or re-uploading the file."
+        message: "File content not present or invalid. Try re-uploading the file."
       });
     }
 
-    const filename = safeContentDispositionFilename(docu.name || `file-${docu._id}`);
-    const dispositionType = inline ? 'inline' : 'attachment';
-    // Set both filename and filename* for unicode-safe download names
-    res.setHeader('Content-Disposition', `${dispositionType}; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    const filename = sanitizeFilename(docu.name || `file-${docu._id}`);
+    const disposition = inline ? 'inline' : 'attachment';
+    // safe headers for unicode filenames
+    res.setHeader('Content-Disposition', `${disposition}; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
     res.setHeader('Content-Type', docu.contentType || 'application/octet-stream');
-    res.setHeader('Content-Length', buf.length);
+    res.setHeader('Content-Length', String(buf.length));
 
-    // Stream/send the buffer
-    return res.send(buf);
+    // Send buffer directly (Express will handle streaming)
+    res.send(buf);
+
+    await logActivity(req.headers['x-username'] || 'Unknown', `Downloaded document: ${filename}`);
   } catch (err) {
-    console.error("Document download error:", err); 
-    res.status(500).json({ message: "Server error during download" });
+    console.error("Document download error:", err);
+    return res.status(500).json({ message: "Server error during download" });
   }
 });
 
-// Download by name (exact match). Client should encodeURIComponent the name in the URL.
+// Download by name (exact match)
 app.get("/api/documents/download/name/:name", async (req, res) => {
   try {
     const rawName = req.params.name || '';
     const decoded = decodeURIComponent(rawName);
-    // exact match (case sensitive). If you want case-insensitive, use regex.
     const docu = await Doc.findOne({ name: decoded }).lean();
     if (!docu) return res.status(404).json({ message: "Document not found by name" });
 
-    const buf = toNodeBuffer(docu.data);
+    const buf = normalizeDbDataToBuffer(docu.data);
     if (!buf) {
       return res.status(400).json({
-        message: "File content not stored on server. This file may have been uploaded before the schema fix. Try generating a new report or re-uploading the file."
+        message: "File content not present or invalid. Try re-uploading the file."
       });
     }
 
-    // allow inline query param
     const inline = String(req.query.inline || '') === '1';
-    const filename = safeContentDispositionFilename(docu.name || `file-${docu._id}`);
-    const dispositionType = inline ? 'inline' : 'attachment';
-    res.setHeader('Content-Disposition', `${dispositionType}; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    const filename = sanitizeFilename(docu.name || `file-${docu._id}`);
+    const disposition = inline ? 'inline' : 'attachment';
+    res.setHeader('Content-Disposition', `${disposition}; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
     res.setHeader('Content-Type', docu.contentType || 'application/octet-stream');
-    res.setHeader('Content-Length', buf.length);
+    res.setHeader('Content-Length', String(buf.length));
 
-    return res.send(buf);
+    res.send(buf);
+
+    await logActivity(req.headers['x-username'] || 'Unknown', `Downloaded document by name: ${filename}`);
   } catch (err) {
     console.error("Document download by name error:", err);
-    res.status(500).json({ message: "Server error during download by name" });
+    return res.status(500).json({ message: "Server error during download by name" });
   }
 });
+
 
 // ============================================================================
 //                               ACTIVITY LOGS
