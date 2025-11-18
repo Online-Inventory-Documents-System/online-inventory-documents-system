@@ -91,21 +91,6 @@ function renderInventory(items) {
   if(qs('#totalStock')) qs('#totalStock').textContent = totalStock;
 }
 
-// Add this function to check document data
-async function checkDocumentData(docId) {
-  try {
-    const res = await fetch(`${API_BASE}/documents/${docId}/check`);
-    if (res.ok) {
-      const data = await res.json();
-      return data.hasData;
-    }
-    return false;
-  } catch (e) {
-    console.error('Check document error:', e);
-    return false;
-  }
-}
-
 // Update the renderDocuments function to be more accurate
 function renderDocuments(docs) {
   const list = qs('#docList');
@@ -116,11 +101,10 @@ function renderDocuments(docs) {
     const id = d.id || d._id;
     const sizeMB = ((d.sizeBytes || d.size || 0) / (1024*1024)).toFixed(2);
     
-    // More accurate data detection
-    const hasValidData = d.size > 0 && parseFloat(sizeMB) > 0;
+    // Check if document is likely valid
+    const isLikelyValid = d.size > 0 && parseFloat(sizeMB) > 0;
     const fileType = d.contentType || 'Unknown';
     
-    // Clean up file type display
     let displayType = fileType.split('/').pop();
     if (displayType === 'vnd.openxmlformats-officedocument.spreadsheetml.sheet') displayType = 'xlsx';
     if (displayType === 'vnd.openxmlformats-officedocument.wordprocessingml.document') displayType = 'docx';
@@ -133,18 +117,44 @@ function renderDocuments(docs) {
       <td>${new Date(d.date).toLocaleString()}</td>
       <td>${displayType}</td>
       <td class="actions">
-        <button class="primary-btn small-btn download-btn" data-id="${id}" data-name="${escapeHtml(d.name||'')}" ${!hasValidData ? 'disabled' : ''}>
-          ${hasValidData ? '⬇️ Download' : '❌ 0 Bytes'}
+        <button class="primary-btn small-btn download-btn" data-id="${id}" data-name="${escapeHtml(d.name||'')}">
+          ⬇️ Download
         </button>
         <button class="danger-btn small-btn delete-btn" data-id="${id}">🗑️ Delete</button>
-        <button class="secondary-btn small-btn debug-btn" data-id="${id}" title="Debug Info">🐛</button>
+        <button class="secondary-btn small-btn verify-btn" data-id="${id}" title="Verify File">🔍 Verify</button>
       </td>
     `;
     list.appendChild(tr);
   });
 
-  // Add event listeners after rendering
   bindDocumentEvents();
+}
+
+// Add verification function
+async function verifyDocument(docId) {
+  try {
+    const res = await fetch(`${API_BASE}/documents/${docId}/verify`);
+    if (res.ok) {
+      const data = await res.json();
+      
+      let message = `Document Verification:\n\n`;
+      message += `Name: ${data.name}\n`;
+      message += `Stored Size: ${data.storedSize} bytes\n`;
+      message += `Actual Data: ${data.actualDataLength} bytes\n`;
+      message += `Has Data: ${data.hasData ? 'YES' : 'NO'}\n`;
+      message += `Is Buffer: ${data.isBuffer ? 'YES' : 'NO'}\n`;
+      message += `Valid: ${data.valid ? 'YES ✅' : 'NO ❌'}\n`;
+      message += `Content Type: ${data.contentType}\n`;
+      message += `Upload Date: ${new Date(data.date).toLocaleString()}`;
+      
+      alert(message);
+    } else {
+      alert('Verification failed');
+    }
+  } catch (e) {
+    console.error('Verify error:', e);
+    alert('Verification failed: ' + e.message);
+  }
 }
 
 // Add this function to bind events properly
@@ -154,9 +164,7 @@ function bindDocumentEvents() {
     btn.addEventListener('click', function() {
       const id = this.getAttribute('data-id');
       const name = this.getAttribute('data-name');
-      if (!this.disabled) {
-        downloadDocument(id, name);
-      }
+      downloadDocument(id, name);
     });
   });
 
@@ -168,38 +176,122 @@ function bindDocumentEvents() {
     });
   });
 
-  // Debug buttons
-  qsa('.debug-btn').forEach(btn => {
+  // Verify buttons
+  qsa('.verify-btn').forEach(btn => {
     btn.addEventListener('click', function() {
       const id = this.getAttribute('data-id');
-      debugDocument(id);
+      verifyDocument(id);
     });
   });
 }
 
-// Update the debug function
-async function debugDocument(docId) {
+// Improved download function with verification
+async function downloadDocument(docId, fileName) {
+  if(!confirm(`Confirm Download: ${fileName}?`)) return;
+  
   try {
-    console.log(`Debugging document: ${docId}`);
-    const res = await fetch(`${API_BASE}/debug/document/${docId}`);
-    if (!res.ok) {
-      throw new Error(`Server returned ${res.status}`);
+    console.log(`Starting download: ${fileName} (ID: ${docId})`);
+    
+    // First verify the document
+    const verifyRes = await fetch(`${API_BASE}/documents/${docId}/verify`);
+    if (!verifyRes.ok) {
+      throw new Error('Failed to verify document');
     }
+    
+    const verifyData = await verifyRes.json();
+    console.log('Document verification:', verifyData);
+    
+    if (!verifyData.valid) {
+      throw new Error(`Document is corrupted or empty. Stored size: ${verifyData.storedSize} bytes, Actual data: ${verifyData.actualDataLength} bytes`);
+    }
+
+    // Now download the document
+    const res = await fetch(`${API_BASE}/documents/download/${docId}`);
+    
+    if(!res.ok) {
+      let errorMessage = 'Download failed';
+      try {
+        const errorData = await res.json();
+        errorMessage = errorData.message || errorMessage;
+      } catch (e) {
+        errorMessage = `Server error: ${res.status} ${res.statusText}`;
+      }
+      throw new Error(errorMessage);
+    }
+
+    const contentLength = res.headers.get('Content-Length');
+    const contentType = res.headers.get('Content-Type');
+    
+    console.log(`Download response:`, {
+      status: res.status,
+      contentLength,
+      contentType
+    });
+
+    if (!contentLength || contentLength === '0') {
+      throw new Error('File is empty or not properly stored');
+    }
+
+    const blob = await res.blob();
+    
+    console.log(`Blob created:`, {
+      size: blob.size,
+      type: blob.type
+    });
+
+    if (blob.size === 0) {
+      throw new Error('Downloaded file is empty');
+    }
+
+    // Create and trigger download
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.style.display = 'none';
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    
+    // Clean up
+    setTimeout(() => {
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    }, 100);
+
+    console.log(`Download completed: ${fileName}`);
+
+  } catch (error) {
+    console.error('Download error:', error);
+    alert(`❌ Download Failed: ${error.message}`);
+    
+    // Offer to regenerate if it's a report
+    if (fileName.includes('Inventory_Report') && confirm('This report file appears to be corrupted. Would you like to generate a new one?')) {
+      if (fileName.endsWith('.pdf')) {
+        confirmAndGeneratePDF();
+      } else if (fileName.endsWith('.xlsx')) {
+        confirmAndGenerateReport();
+      }
+    }
+  }
+}
+
+// Cleanup corrupted documents function
+async function cleanupCorruptedDocuments() {
+  if (!confirm('This will remove all documents that are corrupted or have 0 bytes. Continue?')) return;
+  
+  try {
+    const res = await apiFetch(`${API_BASE}/cleanup-documents`, { method: 'DELETE' });
     const data = await res.json();
-    console.log('Document debug info:', data);
     
-    let debugInfo = `Debug Info:\n`;
-    debugInfo += `Name: ${data.name || 'N/A'}\n`;
-    debugInfo += `Size: ${data.size || 0} bytes\n`;
-    debugInfo += `Has Data: ${data.hasData ? 'YES' : 'NO'}\n`;
-    debugInfo += `Data Length: ${data.dataLength || 0}\n`;
-    debugInfo += `Content Type: ${data.contentType || 'N/A'}\n`;
-    debugInfo += `Valid: ${data.isSizeValid ? 'YES' : 'NO'}`;
-    
-    alert(debugInfo);
+    if (data.success) {
+      alert(`✅ Cleanup completed! Removed ${data.deletedCount} corrupted documents.`);
+      await fetchDocuments();
+    } else {
+      alert('❌ Cleanup failed: ' + data.message);
+    }
   } catch (e) {
-    console.error('Debug error:', e);
-    alert('Debug failed: ' + e.message);
+    console.error('Cleanup error:', e);
+    alert('Cleanup failed: ' + e.message);
   }
 }
 
@@ -637,72 +729,6 @@ async function uploadDocuments(){
   }, 3000);
 }
 
-// Update download function with better error handling
-async function downloadDocument(docId, fileName) {
-  if(!confirm(`Confirm Download: ${fileName}?`)) return;
-  
-  try {
-    console.log(`Starting download: ${fileName} (ID: ${docId})`);
-    
-    const res = await fetch(`${API_BASE}/documents/download/${docId}`);
-    
-    if(!res.ok) {
-      let errorMessage = 'Download failed';
-      try {
-        const errorData = await res.json();
-        errorMessage = errorData.message || errorMessage;
-      } catch (e) {
-        errorMessage = `Server error: ${res.status} ${res.statusText}`;
-      }
-      throw new Error(errorMessage);
-    }
-
-    const contentLength = res.headers.get('Content-Length');
-    const contentType = res.headers.get('Content-Type');
-    
-    console.log(`Download response:`, {
-      status: res.status,
-      contentLength,
-      contentType
-    });
-
-    if (!contentLength || contentLength === '0') {
-      throw new Error('File is empty or not properly stored');
-    }
-
-    const blob = await res.blob();
-    
-    console.log(`Blob created:`, {
-      size: blob.size,
-      type: blob.type
-    });
-
-    if (blob.size === 0) {
-      throw new Error('Downloaded file is empty');
-    }
-
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.style.display = 'none';
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    
-    // Clean up
-    setTimeout(() => {
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    }, 100);
-
-    console.log(`Download completed: ${fileName}`);
-
-  } catch (error) {
-    console.error('Download error:', error);
-    alert(`❌ Download Failed: ${error.message}`);
-  }
-}
-
 // Update delete function
 async function deleteDocumentConfirm(id) {
   const doc = documents.find(d => String(d.id) === String(id));
@@ -802,4 +828,5 @@ window.openEditPageForItem = openEditPageForItem;
 window.confirmAndDeleteItem = confirmAndDeleteItem;
 window.downloadDocument = downloadDocument;
 window.deleteDocumentConfirm = deleteDocumentConfirm;
-window.debugDocument = debugDocument;
+window.verifyDocument = verifyDocument;
+window.cleanupCorruptedDocuments = cleanupCorruptedDocuments;
