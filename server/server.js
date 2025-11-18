@@ -18,12 +18,6 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Specialized middleware for handling raw file uploads
-const rawBodyMiddleware = express.raw({
-  type: '*/*',
-  limit: '50mb'
-});
-
 // ===== MongoDB Connection =====
 if (!MONGODB_URI) {
   console.error("MONGODB_URI is not set.");
@@ -543,8 +537,6 @@ app.get("/api/inventory/report", async (req, res) => {
 // ============================================================================
 //                       DOCUMENTS UPLOAD - COMPLETELY REWRITTEN
 // ============================================================================
-
-// Remove the rawBodyMiddleware and use this approach instead
 app.post("/api/documents", async (req, res) => {
   console.log("📤 Document upload request received");
   
@@ -660,21 +652,7 @@ app.get("/api/documents", async (req, res) => {
   }
 });
 
-app.delete("/api/documents/:id", async (req, res) => {
-  try {
-    const docu = await Doc.findByIdAndDelete(req.params.id);
-    if (!docu) return res.status(404).json({ message: "Document not found" });
-
-    await logActivity(req.headers["x-username"], `Deleted document: ${docu.name}`);
-    res.status(204).send();
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// Add this to server.js in the DOCUMENTS CRUD section
+// Document check route - to verify if file has data
 app.get("/api/documents/:id/check", async (req, res) => {
   try {
     const docu = await Doc.findById(req.params.id);
@@ -690,6 +668,20 @@ app.get("/api/documents/:id/check", async (req, res) => {
   } catch (err) {
     console.error("Document check error:", err);
     res.status(500).json({ hasData: false });
+  }
+});
+
+app.delete("/api/documents/:id", async (req, res) => {
+  try {
+    const docu = await Doc.findByIdAndDelete(req.params.id);
+    if (!docu) return res.status(404).json({ message: "Document not found" });
+
+    await logActivity(req.headers["x-username"], `Deleted document: ${docu.name}`);
+    res.status(204).send();
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
   }
 });
 
@@ -735,6 +727,40 @@ app.get("/api/documents/download/:id", async (req, res) => {
   } catch (err) {
     console.error("❌ Document download error:", err); 
     res.status(500).json({ message: "Server error during download: " + err.message });
+  }
+});
+
+// ============================================================================
+//                    DEBUG ROUTE - CHECK SPECIFIC DOCUMENT
+// ============================================================================
+app.get("/api/debug/document/:id", async (req, res) => {
+  try {
+    console.log(`🔍 Debug request for document: ${req.params.id}`);
+    
+    const docu = await Doc.findById(req.params.id);
+    if (!docu) {
+      console.log('Document not found');
+      return res.status(404).json({ error: "Document not found" });
+    }
+    
+    const debugInfo = {
+      id: docu._id.toString(),
+      name: docu.name,
+      size: docu.size,
+      contentType: docu.contentType,
+      hasData: !!docu.data,
+      dataLength: docu.data ? docu.data.length : 0,
+      dataType: typeof docu.data,
+      isBuffer: Buffer.isBuffer(docu.data),
+      date: docu.date,
+      isSizeValid: docu.size > 0 && docu.size === (docu.data ? docu.data.length : 0)
+    };
+    
+    console.log(`🔍 Debug info for ${docu.name}:`, debugInfo);
+    res.json(debugInfo);
+  } catch (err) {
+    console.error("Debug error:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -814,36 +840,3 @@ async function ensureDefaultAdminAndStartupLog() {
   console.log("Starting server...");
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 })();
-// ============================================================================
-//                    DEBUG ROUTE - CHECK SPECIFIC DOCUMENT
-// ============================================================================
-app.get("/api/debug/document/:id", async (req, res) => {
-  try {
-    console.log(`🔍 Debug request for document: ${req.params.id}`);
-    
-    const docu = await Doc.findById(req.params.id);
-    if (!docu) {
-      console.log('Document not found');
-      return res.status(404).json({ error: "Document not found" });
-    }
-    
-    const debugInfo = {
-      id: docu._id.toString(),
-      name: docu.name,
-      size: docu.size,
-      contentType: docu.contentType,
-      hasData: !!docu.data,
-      dataLength: docu.data ? docu.data.length : 0,
-      dataType: typeof docu.data,
-      isBuffer: Buffer.isBuffer(docu.data),
-      date: docu.date,
-      isSizeValid: docu.size > 0 && docu.size === (docu.data ? docu.data.length : 0)
-    };
-    
-    console.log(`🔍 Debug info for ${docu.name}:`, debugInfo);
-    res.json(debugInfo);
-  } catch (err) {
-    console.error("Debug error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
