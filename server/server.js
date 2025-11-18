@@ -7,7 +7,6 @@ const xlsx = require('xlsx');
 const mongoose = require('mongoose');
 const path = require('path');
 const PDFDocument = require('pdfkit');   // PDF generator
-// REMOVED: const multer = require('multer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -19,8 +18,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Specialized middleware for handling raw file uploads (replacement for Multer)
-// CRITICAL FIX: This middleware parses the raw file bytes into req.body
+// Specialized middleware for handling raw file uploads
 const rawBodyMiddleware = express.raw({
   type: '*/*', // Accept all content types
   limit: '50mb' // Set a reasonable limit for file size (50MB)
@@ -68,7 +66,6 @@ const DocumentSchema = new Schema({
   name: String,
   size: Number,
   date: { type: Date, default: Date.now },
-  // CRITICAL FIX: Fields to store file content
   data: Buffer,       // Stores the file content as a Buffer
   contentType: String // Stores the file's MIME type
 });
@@ -270,7 +267,13 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
     doc.on("end", async () => {
       try {
         const pdfBuffer = Buffer.concat(pdfChunks);
-        // CRITICAL FIX: Saving the buffer to the 'data' field
+        
+        // Double-check the buffer is valid
+        if (!pdfBuffer || pdfBuffer.length === 0) {
+          console.error("Generated PDF buffer is empty");
+          return;
+        }
+        
         await Doc.create({
           name: filename,
           size: pdfBuffer.length,
@@ -278,6 +281,8 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
           data: pdfBuffer,
           contentType: "application/pdf"
         });
+        
+        console.log(`PDF saved to database: ${filename}, size: ${pdfBuffer.length} bytes`);
         await logActivity(printedBy, `Generated Inventory Report PDF: ${filename}`);
       } catch (saveErr) {
         console.error("Failed to save PDF to documents collection:", saveErr);
@@ -288,7 +293,7 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
     res.setHeader("Content-Type", "application/pdf");
     doc.pipe(res);
 
-    // PDF Generation logic (simplified for context)
+    // PDF Generation logic
     doc.fontSize(22).font("Helvetica-Bold").text("L&B Company", 40, 40);
     doc.fontSize(10).font("Helvetica");
     doc.text("Jalan Mawar 8, Taman Bukit Beruang Permai, Melaka", 40, 70);
@@ -409,7 +414,7 @@ app.get("/api/inventory/report", async (req, res) => {
   try {
     const items = await Inventory.find({}).lean();
     const now = new Date();
-    const filename = `Inventory_Report_${now.toISOString().slice(0, 10)}.xlsx`;
+    const filename = `Inventory_Report_${now.toISOString().slice(0, 10)}_${Date.now()}.xlsx`;
 
     const ws_data = [
       ["L&B Company - Inventory Report"],
@@ -451,7 +456,13 @@ app.get("/api/inventory/report", async (req, res) => {
     xlsx.utils.book_append_sheet(wb, ws, "Inventory Report");
     const wb_out = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
 
-    // CRITICAL FIX: Saving the buffer to the 'data' field
+    // Ensure the buffer is valid before saving
+    if (!wb_out || wb_out.length === 0) {
+      console.error("Generated XLSX buffer is empty");
+      return res.status(500).json({ message: "Report generation failed - empty buffer" });
+    }
+
+    // Save the buffer to the 'data' field
     await Doc.create({ 
       name: filename, 
       size: wb_out.length, 
@@ -460,7 +471,8 @@ app.get("/api/inventory/report", async (req, res) => {
       contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     });
     
-    await logActivity(req.headers["x-username"], `Generated Inventory Report XLSX`);
+    console.log(`XLSX saved to database: ${filename}, size: ${wb_out.length} bytes`);
+    await logActivity(req.headers["x-username"], `Generated Inventory Report XLSX: ${filename}`);
 
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -473,21 +485,18 @@ app.get("/api/inventory/report", async (req, res) => {
 });
 
 // ============================================================================
-//                       DOCUMENTS UPLOAD (CRITICAL FIX - NO MULTER)
+//                       DOCUMENTS UPLOAD
 // ============================================================================
-// Apply the raw body parser middleware only to this route
 app.post("/api/documents", rawBodyMiddleware, async (req, res) => {
-  // req.body now contains the raw file buffer because of rawBodyMiddleware
   const fileBuffer = req.body;
   
-  // Get metadata from request headers (set by the updated script.js)
   const contentType = req.headers['content-type']; 
   const fileName = req.headers['x-file-name'];     
   const username = req.headers["x-username"];
 
   if (!fileBuffer || !fileBuffer.length || !contentType || !fileName) {
     return res.status(400).json({ 
-      message: "No file content or required metadata (filename/type) provided for upload. Ensure script.js is updated." 
+      message: "No file content or required metadata (filename/type) provided for upload." 
     });
   }
 
@@ -496,14 +505,13 @@ app.post("/api/documents", rawBodyMiddleware, async (req, res) => {
       name: fileName,
       size: fileBuffer.length,
       date: new Date(),
-      data: fileBuffer,       // Save the raw buffer
-      contentType: contentType // Save the MIME type
+      data: fileBuffer,
+      contentType: contentType
     });
     
     await logActivity(username, `Uploaded document: ${docu.name} (${contentType})`);
     
-    // Respond with the uploaded document metadata (as an array to match client expectations)
-    res.status(201).json([{ ...docu.toObject(), id: docu._id.toString() }]); 
+    res.status(201).json([{ ...docu.toObject(), id: docu._id.toString() }]);
   } catch (err) {
     console.error("Document upload error:", err);
     res.status(500).json({ message: "Server error during file storage." });
@@ -515,7 +523,6 @@ app.post("/api/documents", rawBodyMiddleware, async (req, res) => {
 // ============================================================================
 app.get("/api/documents", async (req, res) => {
   try {
-    // Exclude the 'data' buffer from the metadata list to save memory
     const docs = await Doc.find({}).select('-data').sort({ date: -1 }).lean();
     res.json(docs.map(d => ({ ...d, id: d._id.toString() })));
   } catch (err) {
@@ -538,37 +545,35 @@ app.delete("/api/documents/:id", async (req, res) => {
   }
 });
 
-
 // ============================================================================
-//                             DOCUMENTS DOWNLOAD (CRITICAL FIX: Route was missing)
+//                             DOCUMENTS DOWNLOAD (FIXED)
 // ============================================================================
 app.get("/api/documents/download/:id", async (req, res) => {
   try {
-    // Fetch the document, including the binary 'data' field
-    const docu = await Doc.findById(req.params.id).lean(); 
+    const docu = await Doc.findById(req.params.id);
     
-    if (!docu) return res.status(404).json({ message: "Document not found" });
+    if (!docu) {
+      return res.status(404).json({ message: "Document not found" });
+    }
 
-    if (!docu.data || !docu.contentType) {
-      // This is the error seen when the file content was not saved correctly
+    if (!docu.data || !Buffer.isBuffer(docu.data)) {
+      console.error("Document data is missing or invalid for ID:", req.params.id);
       return res.status(400).json({ 
-        message: "File content not stored on server. This file may have been uploaded before the schema fix. Try generating a new report or re-uploading the file." 
+        message: "File content not available. This file may have been uploaded before the schema fix." 
       });
     }
 
-    // Set headers for file download
     res.setHeader("Content-Disposition", `attachment; filename="${docu.name}"`);
-    res.setHeader("Content-Type", docu.contentType);
-    res.setHeader("Content-Length", docu.size);
+    res.setHeader("Content-Type", docu.contentType || "application/octet-stream");
+    res.setHeader("Content-Length", docu.data.length);
     
-    // Send the binary data
     res.send(docu.data);
 
-    await logActivity(req.headers["x-username"], `Downloaded document: ${docu.name}`);
+    await logActivity(req.headers["x-username"] || "System", `Downloaded document: ${docu.name}`);
 
   } catch (err) {
     console.error("Document download error:", err); 
-    res.status(500).json({ message: "Server error during download" });
+    res.status(500).json({ message: "Server error during download: " + err.message });
   }
 });
 
