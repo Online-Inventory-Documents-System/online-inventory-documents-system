@@ -115,19 +115,30 @@ function renderDocuments(docs) {
   docs.forEach(d => {
     const id = d.id || d._id;
     const sizeMB = ((d.sizeBytes || d.size || 0) / (1024*1024)).toFixed(2);
-    // More accurate check - if size is 0, definitely no data
-    const hasData = parseFloat(sizeMB) > 0;
+    
+    // Better data detection - check both size and data existence
+    const hasValidData = parseFloat(sizeMB) > 0.001; // At least 1KB
     const fileType = d.contentType || 'Unknown';
+    
+    // Clean up file type display
+    let displayType = fileType.split('/').pop();
+    if (displayType === 'vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+      displayType = 'xlsx';
+    } else if (displayType === 'vnd.openxmlformats-officedocument.wordprocessingml.document') {
+      displayType = 'docx';
+    } else if (displayType === 'vnd.openxmlformats-officedocument.presentationml.presentation') {
+      displayType = 'pptx';
+    }
     
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${escapeHtml(d.name||'')}</td>
       <td>${sizeMB} MB</td>
       <td>${new Date(d.date).toLocaleString()}</td>
-      <td>${fileType.split('/').pop()}</td>
+      <td>${displayType}</td>
       <td class="actions">
-        <button class="primary-btn small-btn" onclick="downloadDocument('${id}', '${escapeHtml(d.name||'')}')" ${!hasData ? 'disabled title="File has no content (0 bytes)"' : ''}>
-          ${hasData ? '⬇️ Download' : '❌ 0 Bytes'}
+        <button class="primary-btn small-btn" onclick="downloadDocument('${id}', '${escapeHtml(d.name||'')}')" ${!hasValidData ? 'disabled title="File has no content or is too small"' : ''}>
+          ${hasValidData ? '⬇️ Download' : '❌ No Data'}
         </button>
         <button class="danger-btn small-btn" onclick="deleteDocumentConfirm('${id}')">🗑️ Delete</button>
       </td>
@@ -666,6 +677,7 @@ window.openEditPageForItem = openEditPageForItem;
 window.confirmAndDeleteItem = confirmAndDeleteItem;
 window.downloadDocument = downloadDocument;
 window.deleteDocumentConfirm = deleteDocumentConfirm;
+
 
 
 
