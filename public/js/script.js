@@ -486,7 +486,12 @@ async function uploadDocuments(){
   const fileInput = qs('#docUpload');
   const files = fileInput?.files;
   let msgEl = qs('#uploadMessage');
-  if(!msgEl){ msgEl = document.createElement('p'); msgEl.id = 'uploadMessage'; if(qs('.controls')) qs('.controls').appendChild(msgEl); }
+  
+  if(!msgEl){ 
+    msgEl = document.createElement('p'); 
+    msgEl.id = 'uploadMessage'; 
+    if(qs('.controls')) qs('.controls').appendChild(msgEl); 
+  }
 
   if(!files || files.length === 0) { 
     showMsg(msgEl, '⚠️ Please select a file to upload.', 'red'); 
@@ -494,126 +499,86 @@ async function uploadDocuments(){
   }
   
   if (files.length > 1) {
-    showMsg(msgEl, '⚠️ Only single file uploads are supported with the current server configuration. Please select only one file.', 'red');
+    showMsg(msgEl, '⚠️ Only single file uploads are supported. Please select only one file.', 'red');
     fileInput.value = '';
     return;
   }
   
   const file = files[0];
-  if(!confirm(`Confirm Upload: Upload file "${file.name}" and save file content to the server?`)) { showMsg(msgEl, 'Upload cancelled.', 'orange'); return; }
   
-  showMsg(msgEl, `Uploading file "${file.name}"...`, 'orange');
+  // Validate file size
+  if (file.size === 0) {
+    showMsg(msgEl, '⚠️ The selected file is empty (0 bytes).', 'red');
+    return;
+  }
+
+  if (file.size > 50 * 1024 * 1024) {
+    showMsg(msgEl, '⚠️ File size exceeds 50MB limit.', 'red');
+    return;
+  }
+
+  if(!confirm(`Confirm Upload: Upload file "${file.name}" (${(file.size / (1024*1024)).toFixed(2)} MB)?`)) { 
+    showMsg(msgEl, 'Upload cancelled.', 'orange'); 
+    return; 
+  }
+  
+  showMsg(msgEl, `📤 Uploading file "${file.name}"...`, 'orange');
 
   try {
-    const fileReader = new FileReader();
+    console.log(`Starting upload: ${file.name}, size: ${file.size} bytes, type: ${file.type}`);
+    
+    // Read file as ArrayBuffer
+    const fileBuffer = await file.arrayBuffer();
+    
+    if (!fileBuffer || fileBuffer.byteLength === 0) {
+      throw new Error("File reading failed - empty buffer");
+    }
 
-    const fileBuffer = await new Promise((resolve, reject) => {
-        fileReader.onload = (e) => resolve(e.target.result);
-        fileReader.onerror = reject;
-        fileReader.readAsArrayBuffer(file);
-    });
+    console.log(`File read successfully: ${fileBuffer.byteLength} bytes`);
+    
+    // Convert ArrayBuffer to Buffer for upload
+    const uint8Array = new Uint8Array(fileBuffer);
     
     const res = await fetch(`${API_BASE}/documents`, { 
         method: 'POST', 
-        body: fileBuffer,
+        body: uint8Array,
         headers: {
             'Content-Type': file.type || 'application/octet-stream', 
             'X-Username': getUsername(),
-            'X-File-Name': file.name,
+            'X-File-Name': encodeURIComponent(file.name),
+            'Content-Length': fileBuffer.byteLength.toString()
         }
     });
 
+    console.log(`Upload response status: ${res.status}`);
+
     if(res.ok) {
-      await res.json();
-      showMsg(msgEl, `✅ Successfully uploaded and stored file: "${file.name}".`, 'green');
+      const result = await res.json();
+      console.log('Upload successful, server response:', result);
+      
+      showMsg(msgEl, `✅ Successfully uploaded: "${file.name}" (${(file.size / (1024*1024)).toFixed(2)} MB)`, 'green');
+      
+      // Refresh documents list
+      await fetchDocuments();
+      
     } else {
-      const err = await res.json();
-      throw new Error(err.message || `Server responded with status ${res.status}`);
+      const errorData = await res.json().catch(() => ({ message: 'Unknown server error' }));
+      throw new Error(errorData.message || `Server error: ${res.status}`);
     }
   } catch(e) {
-    console.error('Upload error:', e);
-    showMsg(msgEl, `❌ Failed to upload and store file: ${e.message}`, 'red');
+    console.error('❌ Upload error:', e);
+    showMsg(msgEl, `❌ Upload failed: ${e.message}`, 'red');
     if(fileInput) fileInput.value = '';
     return;
   }
   
+  // Clear input and remove message
   if(fileInput) fileInput.value = '';
-  setTimeout(async ()=> { await fetchDocuments(); if(msgEl) msgEl.remove(); }, 1000);
-}
-
-async function downloadDocument(docId, fileName) {
-  if(!confirm(`Confirm Download: ${fileName}?`)) return;
-  
-  try {
-    const res = await fetch(`${API_BASE}/documents/download/${docId}`);
-    
-    if(!res.ok) {
-      let errorMessage = 'Download failed';
-      try {
-        const errorData = await res.json();
-        errorMessage = errorData.message || errorMessage;
-      } catch (e) {
-        errorMessage = `Server error: ${res.status} ${res.statusText}`;
-      }
-      throw new Error(errorMessage);
+  setTimeout(() => { 
+    if(msgEl) {
+      msgEl.remove(); 
     }
-
-    const contentLength = res.headers.get('Content-Length');
-    const contentType = res.headers.get('Content-Type');
-    
-    if (!contentLength || contentLength === '0') {
-      throw new Error('File is empty or not properly stored');
-    }
-
-    const blob = await res.blob();
-    
-    if (blob.size === 0) {
-      throw new Error('Downloaded file is empty');
-    }
-
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.style.display = 'none';
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    
-    setTimeout(() => {
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    }, 100);
-
-  } catch (error) {
-    console.error('Download error:', error);
-    alert(`❌ Download Failed: ${error.message}`);
-  }
-}
-
-async function deleteDocumentConfirm(id) {
-  const doc = documents.find(d => String(d.id) === String(id));
-  if(!doc) return;
-  if(!confirm(`Delete document: ${doc.name}?`)) return;
-  await deleteDocument(id);
-}
-
-async function deleteDocument(id) {
-  try {
-    const res = await apiFetch(`${API_BASE}/documents/${id}`, { method: 'DELETE' });
-    if(res.status === 204 || res.ok) { await fetchDocuments(); alert('🗑️ Document deleted successfully!'); }
-    else { alert('❌ Failed to delete document.'); }
-  } catch(e) { console.error(e); alert('❌ Server error while deleting document.'); }
-}
-
-function searchDocuments() {
-  const q = (qs('#searchDocs')?.value || '').toLowerCase().trim();
-  const filtered = documents.filter(d => (d.name||'').toLowerCase().includes(q) || (d.date? new Date(d.date).toLocaleString().toLowerCase() : '').includes(q));
-  renderDocuments(filtered);
-}
-
-function bindDocumentsUI(){
-  qs('#uploadDocsBtn')?.addEventListener('click', uploadDocuments);
-  qs('#searchDocs')?.addEventListener('input', searchDocuments);
+  }, 3000);
 }
 
 // Settings
@@ -677,6 +642,7 @@ window.openEditPageForItem = openEditPageForItem;
 window.confirmAndDeleteItem = confirmAndDeleteItem;
 window.downloadDocument = downloadDocument;
 window.deleteDocumentConfirm = deleteDocumentConfirm;
+
 
 
 
