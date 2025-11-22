@@ -304,7 +304,7 @@ app.delete("/api/inventory/:id", async (req, res) => {
 });
 
 // ============================================================================
-//                    PDF REPORT — FIXED TABLE ALIGNMENT
+//                    PDF REPORT — PIXEL-PERFECT TABLE ALIGNMENT
 // ============================================================================
 app.get("/api/inventory/report/pdf", async (req, res) => {
   try {
@@ -374,72 +374,76 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
 
         const rowHeight = 18;
         
-        // PERFECTLY ALIGNED COLUMNS - Each column starts where previous ends
-        const colX = { 
-          sku: 40,        // Start at 40
-          name: 105,      // 40 + 65 (sku width)
-          category: 210,   // 105 + 105 (name width) 
-          qty: 295,       // 210 + 85 (category width)
-          cost: 360,      // 295 + 65 (qty width)
-          price: 425,     // 360 + 65 (cost width)
-          value: 490,     // 425 + 65 (price width)
-          revenue: 575,   // 490 + 85 (value width)
-          profit: 670     // 575 + 95 (revenue width)
-        };
-        
-        const width = { 
-          sku: 65,        // Total: 65
-          name: 105,      // Total: 170  
-          category: 85,    // Total: 255
-          qty: 65,        // Total: 320
-          cost: 65,       // Total: 385
-          price: 65,      // Total: 450
-          value: 85,      // Total: 535
-          revenue: 95,    // Total: 630
-          profit: 100     // Total: 730 (leaves room for margin)
-        };
+        // PIXEL-PERFECT COLUMN ALIGNMENT
+        const columns = [
+          { name: "SKU", x: 40, width: 70, align: "left" },
+          { name: "Product Name", x: 110, width: 110, align: "left" },
+          { name: "Category", x: 220, width: 80, align: "left" },
+          { name: "Quantity", x: 300, width: 60, align: "center" },
+          { name: "Unit Cost", x: 360, width: 70, align: "right" },
+          { name: "Unit Price", x: 430, width: 70, align: "right" },
+          { name: "Inventory Value", x: 500, width: 85, align: "right" },
+          { name: "Potential Revenue", x: 585, width: 95, align: "right" },
+          { name: "Potential Profit", x: 680, width: 100, align: "right" }
+        ];
         
         let y = 150;
 
-        function drawHeader() {
-          doc.font("Helvetica-Bold").fontSize(9);
+        function drawTableRow(isHeader = false, data = null) {
+          let currentX = columns[0].x;
           
-          // Draw continuous table header
-          let currentX = colX.sku;
-          doc.rect(currentX, y, width.sku, rowHeight).stroke();
-          currentX += width.sku;
-          doc.rect(currentX, y, width.name, rowHeight).stroke();
-          currentX += width.name;
-          doc.rect(currentX, y, width.category, rowHeight).stroke();
-          currentX += width.category;
-          doc.rect(currentX, y, width.qty, rowHeight).stroke();
-          currentX += width.qty;
-          doc.rect(currentX, y, width.cost, rowHeight).stroke();
-          currentX += width.cost;
-          doc.rect(currentX, y, width.price, rowHeight).stroke();
-          currentX += width.price;
-          doc.rect(currentX, y, width.value, rowHeight).stroke();
-          currentX += width.value;
-          doc.rect(currentX, y, width.revenue, rowHeight).stroke();
-          currentX += width.revenue;
-          doc.rect(currentX, y, width.profit, rowHeight).stroke();
+          // Draw the entire row as one continuous rectangle first
+          doc.rect(columns[0].x, y, 740, rowHeight).stroke();
           
-          // Header text
-          doc.text("SKU", colX.sku + 3, y + 5);
-          doc.text("Product Name", colX.name + 3, y + 5);
-          doc.text("Category", colX.category + 3, y + 5);
-          doc.text("Quantity", colX.qty + 3, y + 5);
-          doc.text("Unit Cost", colX.cost + 3, y + 5);
-          doc.text("Unit Price", colX.price + 3, y + 5);
-          doc.text("Inventory Value", colX.value + 3, y + 5);
-          doc.text("Potential Revenue", colX.revenue + 3, y + 5);
-          doc.text("Potential Profit", colX.profit + 3, y + 5);
+          // Then draw vertical lines for each column
+          for (let i = 1; i < columns.length; i++) {
+            doc.moveTo(columns[i].x, y)
+               .lineTo(columns[i].x, y + rowHeight)
+               .stroke();
+          }
+          
+          // Add text content
+          doc.fontSize(isHeader ? 9 : 8);
+          doc.font(isHeader ? "Helvetica-Bold" : "Helvetica");
+          
+          columns.forEach((col, index) => {
+            let text = "";
+            let textX = col.x + 3;
+            
+            if (isHeader) {
+              text = col.name;
+            } else if (data) {
+              switch (index) {
+                case 0: text = data.sku || ""; break;
+                case 1: text = data.name || ""; break;
+                case 2: text = data.category || ""; break;
+                case 3: text = String(data.qty || 0); break;
+                case 4: text = `RM ${(data.cost || 0).toFixed(2)}`; break;
+                case 5: text = `RM ${(data.price || 0).toFixed(2)}`; break;
+                case 6: text = `RM ${(data.value || 0).toFixed(2)}`; break;
+                case 7: text = `RM ${(data.revenue || 0).toFixed(2)}`; break;
+                case 8: text = `RM ${(data.profit || 0).toFixed(2)}`; break;
+              }
+            }
+            
+            // Handle text alignment
+            if (col.align === "center") {
+              const textWidth = doc.widthOfString(text);
+              textX = col.x + (col.width - textWidth) / 2;
+            } else if (col.align === "right") {
+              const textWidth = doc.widthOfString(text);
+              textX = col.x + col.width - textWidth - 3;
+            }
+            
+            doc.text(text, textX, y + 5, { width: col.width - 6, align: col.align });
+          });
           
           y += rowHeight;
-          doc.font("Helvetica").fontSize(8);
         }
 
-        drawHeader();
+        // Draw header row
+        drawTableRow(true);
+        
         let subtotalQty = 0;
         let totalValue = 0;
         let totalRevenue = 0;
@@ -451,7 +455,7 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
             doc.addPage({ size: "A4", layout: "landscape", margin: 40 });
             y = 40;
             rowsOnPage = 0;
-            drawHeader();
+            drawTableRow(true); // Redraw header on new page
           }
 
           const qty = Number(it.quantity || 0);
@@ -466,38 +470,19 @@ app.get("/api/inventory/report/pdf", async (req, res) => {
           totalRevenue += rev;
           totalProfit += profit;
 
-          // Draw continuous table data row
-          let currentX = colX.sku;
-          doc.rect(currentX, y, width.sku, rowHeight).stroke();
-          currentX += width.sku;
-          doc.rect(currentX, y, width.name, rowHeight).stroke();
-          currentX += width.name;
-          doc.rect(currentX, y, width.category, rowHeight).stroke();
-          currentX += width.category;
-          doc.rect(currentX, y, width.qty, rowHeight).stroke();
-          currentX += width.qty;
-          doc.rect(currentX, y, width.cost, rowHeight).stroke();
-          currentX += width.cost;
-          doc.rect(currentX, y, width.price, rowHeight).stroke();
-          currentX += width.price;
-          doc.rect(currentX, y, width.value, rowHeight).stroke();
-          currentX += width.value;
-          doc.rect(currentX, y, width.revenue, rowHeight).stroke();
-          currentX += width.revenue;
-          doc.rect(currentX, y, width.profit, rowHeight).stroke();
+          // Draw data row
+          drawTableRow(false, {
+            sku: it.sku,
+            name: it.name,
+            category: it.category,
+            qty: qty,
+            cost: cost,
+            price: price,
+            value: val,
+            revenue: rev,
+            profit: profit
+          });
           
-          // Data text
-          doc.text(it.sku || "", colX.sku + 3, y + 5);
-          doc.text(it.name || "", colX.name + 3, y + 5);
-          doc.text(it.category || "", colX.category + 3, y + 5);
-          doc.text(String(qty), colX.qty + 3, y + 5);
-          doc.text(`RM ${cost.toFixed(2)}`, colX.cost + 3, y + 5);
-          doc.text(`RM ${price.toFixed(2)}`, colX.price + 3, y + 5);
-          doc.text(`RM ${val.toFixed(2)}`, colX.value + 3, y + 5);
-          doc.text(`RM ${rev.toFixed(2)}`, colX.revenue + 3, y + 5);
-          doc.text(`RM ${profit.toFixed(2)}`, colX.profit + 3, y + 5);
-          
-          y += rowHeight;
           rowsOnPage++;
         }
 
