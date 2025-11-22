@@ -53,7 +53,7 @@ function renderInventory(items) {
   const list = qs('#inventoryList');
   if(!list) return;
   list.innerHTML = '';
-  let totalValue = 0, totalRevenue = 0, totalStock = 0;
+  let totalValue = 0, totalRevenue = 0, totalProfit = 0, totalStock = 0;
 
   items.forEach(it => {
     const id = it.id || it._id;
@@ -62,8 +62,11 @@ function renderInventory(items) {
     const up = Number(it.unitPrice || 0);
     const invVal = qty * uc;
     const rev = qty * up;
+    const profit = rev - invVal;
+    
     totalValue += invVal;
     totalRevenue += rev;
+    totalProfit += profit;
     totalStock += qty;
 
     const tr = document.createElement('tr');
@@ -78,6 +81,8 @@ function renderInventory(items) {
       <td class="money">RM ${uc.toFixed(2)}</td>
       <td class="money">RM ${up.toFixed(2)}</td>
       <td class="money">RM ${invVal.toFixed(2)}</td>
+      <td class="money">RM ${rev.toFixed(2)}</td>
+      <td class="money">RM ${profit.toFixed(2)}</td>
       <td class="actions">
         <button class="primary-btn small-btn" onclick="openEditPageForItem('${id}')">✏️ Edit</button>
         <button class="danger-btn small-btn" onclick="confirmAndDeleteItem('${id}')">🗑️ Delete</button>
@@ -88,6 +93,7 @@ function renderInventory(items) {
 
   if(qs('#totalValue')) qs('#totalValue').textContent = totalValue.toFixed(2);
   if(qs('#totalRevenue')) qs('#totalRevenue').textContent = totalRevenue.toFixed(2);
+  if(qs('#totalProfit')) qs('#totalProfit').textContent = totalProfit.toFixed(2);
   if(qs('#totalStock')) qs('#totalStock').textContent = totalStock;
 }
 
@@ -337,16 +343,22 @@ function renderDashboardData(){
   }
 
   if(qs('#dash_totalItems')) {
-    let totalValue = 0, totalRevenue = 0, totalStock = 0;
+    let totalValue = 0, totalRevenue = 0, totalProfit = 0, totalStock = 0;
     inventory.forEach(it => {
       const qty = Number(it.quantity || 0);
-      totalValue += qty * Number(it.unitCost || 0);
-      totalRevenue += qty * Number(it.unitPrice || 0);
+      const invVal = qty * Number(it.unitCost || 0);
+      const rev = qty * Number(it.unitPrice || 0);
+      const profit = rev - invVal;
+      
+      totalValue += invVal;
+      totalRevenue += rev;
+      totalProfit += profit;
       totalStock += qty;
     });
     qs('#dash_totalItems').textContent = inventory.length;
     qs('#dash_totalValue').textContent = totalValue.toFixed(2);
     qs('#dash_totalRevenue').textContent = totalRevenue.toFixed(2);
+    qs('#dash_totalProfit').textContent = totalProfit.toFixed(2);
     qs('#dash_totalStock').textContent = totalStock;
   }
 }
