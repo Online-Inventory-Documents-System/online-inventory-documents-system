@@ -309,14 +309,6 @@ input:focus {
     text-align: right;
     font-family: 'Consolas', monospace; 
     font-weight: bold;
-    white-space: nowrap; /* Prevents text wrapping */
-    padding: 12px 8px; /* Adjust padding to ensure enough space */
-}
-
-/* Ensure the currency values don't wrap in inventory table */
-#inventoryTable td.money {
-    white-space: nowrap;
-    min-width: 80px; /* Ensure minimum width for currency values */
 }
 .actions {
     text-align: center;
@@ -326,6 +318,17 @@ input:focus {
     padding: 5px 10px;
     font-size: 0.85em;
 }
+/* Fix for unit cost and unit price columns to prevent RM from wrapping */
+#inventoryTable td:nth-child(5), /* Unit Cost column */
+#inventoryTable td:nth-child(6) { /* Unit Price column */
+    white-space: nowrap;
+    text-align: right;
+    font-family: 'Consolas', monospace;
+    font-weight: bold;
+    min-width: 90px;
+    padding: 12px 8px;
+}
+
 
 /* =========================================
    Dashboard Layout (Unchanged)
